@@ -27,6 +27,9 @@ function App() {
   
   const [filterType, setFilterType] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
+  
+  // === МОДАЛЬНОЕ ОКНО ПРОСМОТРА ===
+  const [viewModal, setViewModal] = useState(null);
 
   const login = async () => {
     try {
@@ -92,7 +95,6 @@ function App() {
     }
   }, [token, loadReceipts]);
 
-  // === ЗАГРУЗКА ФАЙЛОВ ===
   const handleFileSelect = (e) => {
     const files = Array.from(e.target.files);
     if (files.length > 0) {
@@ -130,7 +132,6 @@ function App() {
     }
   };
 
-  // === РАСПОЗНАВАНИЕ И СОХРАНЕНИЕ ===
   const recognizeAndSave = async () => {
     if (!selectedFiles.length) return;
     setRecognizing(true);
@@ -140,7 +141,6 @@ function App() {
       const file = selectedFiles[currentFileIndex];
       const base64 = await fileToBase64(file);
       
-      // Определяем endpoint по выбранной модели
       let endpoint = '/api/identify';
       if (selectedModel.includes('llama') || selectedModel.includes('qwen') || selectedModel.includes('gpt-oss')) {
         endpoint = '/api/identify-groq';
@@ -150,7 +150,6 @@ function App() {
         endpoint = '/api/identify-ocrspace';
       }
       
-      // 1. Распознаём
       const res = await fetch(`${API_URL}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -167,7 +166,6 @@ function App() {
         throw new Error(data.error || 'Распознавание не удалось');
       }
       
-      // 2. Сохраняем в базу
       const saveRes = await fetch(`${API_URL}/api/save-receipt?token=${token}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -183,7 +181,7 @@ function App() {
       
       if (saveData.success && saveData.data) {
         setLastSavedReceipt(saveData.data);
-        loadReceipts(); // Обновляем список чеков
+        loadReceipts();
       } else {
         throw new Error(saveData.error || 'Ошибка сохранения');
       }
@@ -204,6 +202,7 @@ function App() {
       });
       if (res.ok) {
         loadReceipts();
+        if (viewModal && viewModal.id === id) setViewModal(null);
       }
     } catch (e) {
       console.error('Ошибка удаления:', e);
@@ -320,6 +319,81 @@ function App() {
         </button>
       </nav>
 
+      {/* === МОДАЛЬНОЕ ОКНО ПРОСМОТРА ЧЕКА === */}
+      {viewModal && (
+        <div className="modal-overlay" onClick={() => setViewModal(null)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>📄 Чек #{viewModal.id}</h2>
+              <button className="modal-close" onClick={() => setViewModal(null)}>✕</button>
+            </div>
+            
+            <div className="modal-body">
+              <div className="modal-image-section">
+                {viewModal.image_url ? (
+                  <img src={viewModal.image_url} alt="Чек" className="modal-image" />
+                ) : (
+                  <div className="no-image">Нет фото</div>
+                )}
+              </div>
+              
+              <div className="modal-info">
+                <div className="info-block">
+                  <h3>Основная информация</h3>
+                  <p><strong>Магазин:</strong> {viewModal.store_name_ru || viewModal.store_name || '—'}</p>
+                  <p><strong>Дата:</strong> {formatDate(viewModal.receipt_date)} {viewModal.receipt_time}</p>
+                  <p><strong>Итого:</strong> {formatAmount(viewModal.total_amount, viewModal.currency)}</p>
+                  <p><strong>Тип:</strong> {viewModal.document_type}</p>
+                  <p><strong>Метод:</strong> {viewModal.recognition_method || '—'}</p>
+                  {viewModal.subtotal && <p><strong>Подытог:</strong> {viewModal.subtotal}</p>}
+                  {viewModal.tax_amount && <p><strong>Налог:</strong> {viewModal.tax_amount} ({viewModal.tax_rate || ''})</p>}
+                </div>
+                
+                <div className="info-block">
+                  <h3>Товары ({viewModal.items?.length || 0})</h3>
+                  <table className="items-table">
+                    <thead>
+                      <tr>
+                        <th>№</th>
+                        <th>Товар</th>
+                        <th>Кол-во</th>
+                        <th>Цена</th>
+                        <th>Сумма</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(viewModal.items || []).map((item, i) => (
+                        <tr key={i}>
+                          <td>{i + 1}</td>
+                          <td>{item.name_ru || item.name || '—'}</td>
+                          <td>{item.quantity}</td>
+                          <td>{item.price}</td>
+                          <td>{item.total}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                
+                {viewModal.raw_text && (
+                  <div className="info-block">
+                    <h3>Распознанный текст</h3>
+                    <pre className="raw-text">{viewModal.raw_text}</pre>
+                  </div>
+                )}
+              </div>
+            </div>
+            
+            <div className="modal-footer">
+              <button onClick={() => setViewModal(null)}>Закрыть</button>
+              {user?.role === 'admin' && (
+                <button className="danger" onClick={() => deleteReceipt(viewModal.id)}>🗑️ Удалить</button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* === ВКЛАДКА ЗАГРУЗКА === */}
       {activeTab === 'upload' && (
         <div className="upload-section">
@@ -365,7 +439,6 @@ function App() {
             </div>
           </div>
 
-          {/* ЗОНА ЗАГРУЗКИ */}
           <div 
             className="drop-zone"
             onDrop={handleDrop}
@@ -420,21 +493,19 @@ function App() {
             </div>
           </div>
 
-          {/* ОДНА КНОПКА РАСПОЗНАТЬ */}
           <div className="recognize-bar">
             <button 
               className="recognize-main-btn full-width"
               onClick={recognizeAndSave}
               disabled={!selectedFiles.length || recognizing}
             >
-              {recognizing ? '⏳ Распознавание и сохранение...' : '🔍 Распознать и сохранить'}
+              {recognizing ? '⏳ Распознавание...' : '🔍 Распознать и сохранить'}
             </button>
           </div>
 
-          {/* КАРТОЧКА СОХРАНЁННОГО ЧЕКА */}
           {lastSavedReceipt && (
             <div className="saved-receipt-card">
-              <h3>✅ Чек распознан и сохранён</h3>
+              <h3>✅ Чек сохранён</h3>
               <div className="receipt-preview">
                 {lastSavedReceipt.image_url && (
                   <img src={lastSavedReceipt.image_url} alt="Чек" className="receipt-image" />
@@ -442,25 +513,10 @@ function App() {
                 <div className="receipt-info">
                   <p><strong>ID:</strong> {lastSavedReceipt.id}</p>
                   <p><strong>Магазин:</strong> {lastSavedReceipt.store_name_ru || lastSavedReceipt.store_name || '—'}</p>
-                  <p><strong>Дата:</strong> {formatDate(lastSavedReceipt.receipt_date)} {lastSavedReceipt.receipt_time}</p>
+                  <p><strong>Дата:</strong> {formatDate(lastSavedReceipt.receipt_date)}</p>
                   <p><strong>Итого:</strong> {formatAmount(lastSavedReceipt.total_amount, lastSavedReceipt.currency)}</p>
                   <p><strong>Товаров:</strong> {lastSavedReceipt.items?.length || 0}</p>
-                  <p><strong>Метод:</strong> {lastSavedReceipt.recognition_method || '—'}</p>
-                  <p><strong>Тип:</strong> {lastSavedReceipt.document_type}</p>
                 </div>
-              </div>
-              <div className="receipt-items-preview">
-                <h4>Товары:</h4>
-                <ul>
-                  {(lastSavedReceipt.items || []).slice(0, 5).map((item, i) => (
-                    <li key={i}>
-                      {item.name_ru || item.name} — {item.quantity} × {item.price} = {item.total}
-                    </li>
-                  ))}
-                  {(lastSavedReceipt.items || []).length > 5 && (
-                    <li>... и ещё {(lastSavedReceipt.items || []).length - 5} товаров</li>
-                  )}
-                </ul>
               </div>
               <button className="close-btn" onClick={() => setLastSavedReceipt(null)}>Закрыть</button>
             </div>
@@ -511,7 +567,7 @@ function App() {
                     <img src={receipt.image_url} alt="Чек" className="receipt-thumb" />
                   )}
                   <div className="receipt-actions">
-                    <button>👁️ Просмотр</button>
+                    <button onClick={() => setViewModal(receipt)}>👁️ Просмотр</button>
                     {user?.role === 'admin' && (
                       <button onClick={() => deleteReceipt(receipt.id)} className="danger">🗑️ Удалить</button>
                     )}
