@@ -17,7 +17,7 @@ function App() {
   const [previewUrl, setPreviewUrl] = useState(null);
   const [recognizing, setRecognizing] = useState(false);
   const [lastSavedReceipt, setLastSavedReceipt] = useState(null);
-  const [selectedModel, setSelectedModel] = useState('gemini-2.0-flash-lite');
+  const [selectedModel, setSelectedModel] = useState('gemini-1.5-flash');
   const [currency, setCurrency] = useState('AED');
   const [docType, setDocType] = useState('receipt');
   const [showModelSelector, setShowModelSelector] = useState(false);
@@ -31,6 +31,7 @@ function App() {
   // === МОДАЛЬНОЕ ОКНО ПРОСМОТРА ===
   const [viewModal, setViewModal] = useState(null);
 
+  // === LOGIN ===
   const login = async () => {
     try {
       const res = await fetch(`${API_URL}/api/login`, {
@@ -53,48 +54,53 @@ function App() {
     }
   };
 
-  const logout = async () => {
-    if (token) {
-      await fetch(`${API_URL}/api/logout`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token })
-      });
-    }
+  // === LOGOUT ===
+  const logout = () => {
     setToken(null);
     setUser(null);
     localStorage.removeItem('token');
     setReceipts([]);
   };
 
+  // === LOAD RECEIPTS ===
   const loadReceipts = useCallback(async (authToken = token) => {
     if (!authToken) return;
     setLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/receipts?token=${authToken}&type=${filterType}`);
+      const res = await fetch(`${API_URL}/api/receipts?token=${authToken}`);
       const data = await res.json();
-      setReceipts(data.receipts || []);
+      // ✅ Бэкенд возвращает массив напрямую
+      setReceipts(Array.isArray(data) ? data : (data.receipts || []));
     } catch (e) {
       console.error('Ошибка загрузки:', e);
+      setReceipts([]);
     }
     setLoading(false);
-  }, [token, filterType]);
+  }, [token]);
 
+  // === CHECK AUTH ON LOAD ===
   useEffect(() => {
     if (token) {
       fetch(`${API_URL}/api/me?token=${token}`)
         .then(r => r.json())
         .then(data => {
-          if (data.success) {
-            setUser(data.user);
+          // ✅ Бэкенд возвращает {id, email} без success
+          if (data.id || data.valid) {
+            setUser(data.user || data);
             loadReceipts(token);
           } else {
             logout();
           }
+        })
+        .catch(err => {
+          console.error('Auth check error:', err);
+          // При ошибке соединения — НЕ выходим
+          // Просто оставляем как есть
         });
     }
-  }, [token, loadReceipts]);
+  }, [token]);
 
+  // === FILE HANDLERS ===
   const handleFileSelect = (e) => {
     const files = Array.from(e.target.files);
     if (files.length > 0) {
@@ -132,9 +138,7 @@ function App() {
     }
   };
 
-  // ========================================
-  // ✅ ОСНОВНОЙ МЕТОД: Распознавание + Сохранение через FormData
-  // ========================================
+  // === RECOGNIZE AND SAVE ===
   const recognizeAndSave = async () => {
     if (!selectedFiles.length) return;
     setRecognizing(true);
@@ -145,26 +149,24 @@ function App() {
 
       // ✅ Создаем FormData для отправки файла
       const formData = new FormData();
-      formData.append('image', file); // ← файл напрямую, НЕ base64
+      formData.append('image', file);
       formData.append('model', selectedModel);
       formData.append('currency', currency);
       formData.append('docType', docType);
       formData.append('token', token);
 
-      // ✅ Отправляем FormData на новый endpoint /api/upload-receipt
       const res = await fetch(`${API_URL}/api/upload-receipt?token=${token}`, {
         method: 'POST',
-        // ❌ НЕ указываем Content-Type — браузер сам установит boundary для multipart
         body: formData
       });
 
       const data = await res.json();
 
-      if (!data.success || !data.data) {
+      if (!data.success) {
         throw new Error(data.error || 'Распознавание или сохранение не удалось');
       }
 
-      setLastSavedReceipt(data.data);
+      setLastSavedReceipt(data);
       loadReceipts();
 
     } catch (e) {
@@ -175,10 +177,11 @@ function App() {
     setRecognizing(false);
   };
 
+  // === DELETE RECEIPT ===
   const deleteReceipt = async (id) => {
     if (!window.confirm('Удалить чек?')) return;
     try {
-      const res = await fetch(`${API_URL}/api/delete-receipt/${id}?token=${token}`, {
+      const res = await fetch(`${API_URL}/api/receipts/${id}?token=${token}`, {
         method: 'DELETE'
       });
       if (res.ok) {
@@ -190,6 +193,7 @@ function App() {
     }
   };
 
+  // === EXPORT EXCEL ===
   const exportExcel = async () => {
     try {
       const res = await fetch(`${API_URL}/api/export-excel?token=${token}`, {
@@ -208,6 +212,7 @@ function App() {
     }
   };
 
+  // === LOAD MODELS ===
   const loadModels = async () => {
     setModelsLoading(true);
     try {
@@ -221,17 +226,36 @@ function App() {
 
       if (geminiRes.ok) {
         const geminiData = await geminiRes.json();
-        if (geminiData.results) allModels = [...allModels, ...geminiData.results];
+        // ✅ Бэкенд возвращает {models: [...]}
+        if (geminiData.models) {
+          allModels = [...allModels, ...geminiData.models.map(m => ({
+            name: m.id,
+            provider: 'Gemini',
+            status: 'ok'
+          }))];
+        }
       }
 
       if (groqRes.ok) {
         const groqData = await groqRes.json();
-        if (groqData.results) allModels = [...allModels, ...groqData.results];
+        if (groqData.models) {
+          allModels = [...allModels, ...groqData.models.map(m => ({
+            name: m.id,
+            provider: 'Groq',
+            status: 'ok'
+          }))];
+        }
       }
 
       if (ocrRes.ok) {
         const ocrData = await ocrRes.json();
-        if (ocrData.results) allModels = [...allModels, ...ocrData.results];
+        if (ocrData.models) {
+          allModels = [...allModels, ...ocrData.models.map(m => ({
+            name: m.id,
+            provider: 'OCR.space',
+            status: 'ok'
+          }))];
+        }
       }
 
       setModels(allModels);
@@ -241,6 +265,7 @@ function App() {
     setModelsLoading(false);
   };
 
+  // === HELPERS ===
   const formatDate = (dateStr) => {
     if (!dateStr) return '-';
     return new Date(dateStr).toLocaleDateString('ru-RU');
@@ -251,6 +276,7 @@ function App() {
     return `${parseFloat(amount).toFixed(2)} ${currency || ''}`;
   };
 
+  // === LOGIN SCREEN ===
   if (!token) {
     return (
       <div className="App">
@@ -271,6 +297,7 @@ function App() {
     );
   }
 
+  // === MAIN APP ===
   return (
     <div className="App">
       <header className="mini-header">
@@ -291,7 +318,7 @@ function App() {
         </button>
       </nav>
 
-      {/* === МОДАЛЬНОЕ ОКНО ПРОСМОТРА ЧЕКА === */}
+      {/* === VIEW MODAL === */}
       {viewModal && (
         <div className="modal-overlay" onClick={() => setViewModal(null)}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
@@ -358,15 +385,13 @@ function App() {
 
             <div className="modal-footer">
               <button onClick={() => setViewModal(null)}>Закрыть</button>
-              {user?.role === 'admin' && (
-                <button className="danger" onClick={() => deleteReceipt(viewModal.id)}>🗑️ Удалить</button>
-              )}
+              <button className="danger" onClick={() => deleteReceipt(viewModal.id)}>🗑️ Удалить</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* === ВКЛАДКА ЗАГРУЗКА === */}
+      {/* === UPLOAD TAB === */}
       {activeTab === 'upload' && (
         <div className="upload-section">
           <div className="top-controls">
@@ -374,7 +399,7 @@ function App() {
               className="model-toggle-btn"
               onClick={() => {setShowModelSelector(!showModelSelector); if (!models.length) loadModels();}}
             >
-              🤖 {showModelSelector ? 'Скрыть' : `Выбор модели (${models.filter(m => m.status === 'ok').length})`}
+              🤖 {showModelSelector ? 'Скрыть' : `Выбор модели (${models.length})`}
             </button>
 
             {showModelSelector && (
@@ -386,19 +411,15 @@ function App() {
                     {models.map(model => (
                       <div 
                         key={model.name} 
-                        className={`model-option ${selectedModel === model.name ? 'selected' : ''} ${model.status !== 'ok' ? 'disabled' : ''}`}
+                        className={`model-option ${selectedModel === model.name ? 'selected' : ''}`}
                         onClick={() => {
-                          if (model.status === 'ok') {
-                            setSelectedModel(model.name);
-                            setShowModelSelector(false);
-                          }
+                          setSelectedModel(model.name);
+                          setShowModelSelector(false);
                         }}
                       >
                         <span className="provider-badge">{model.provider}</span>
                         <span className="model-name">{model.name}</span>
-                        <span className={model.status === 'ok' ? 'status-ok' : 'status-error'}>
-                          {model.status === 'ok' ? '✅' : '❌'}
-                        </span>
+                        <span className="status-ok">✅</span>
                       </div>
                     ))}
                   </div>
@@ -496,7 +517,7 @@ function App() {
         </div>
       )}
 
-      {/* === ВКЛАДКА СПИСОК === */}
+      {/* === LIST TAB === */}
       {activeTab === 'list' && (
         <div className="list-section">
           <div className="filters">
@@ -540,9 +561,7 @@ function App() {
                   )}
                   <div className="receipt-actions">
                     <button onClick={() => setViewModal(receipt)}>👁️ Просмотр</button>
-                    {user?.role === 'admin' && (
-                      <button onClick={() => deleteReceipt(receipt.id)} className="danger">🗑️ Удалить</button>
-                    )}
+                    <button onClick={() => deleteReceipt(receipt.id)} className="danger">🗑️ Удалить</button>
                   </div>
                 </div>
               ))}
