@@ -1,9 +1,16 @@
 require('dotenv').config();
 const { createClient } = require('@supabase/supabase-js');
+const ws = require('ws');
 
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+
+// ✅ ИСПРАВЛЕНО: добавлен transport: ws для Node.js 20
+const supabase = createClient(supabaseUrl, supabaseKey, {
+  realtime: {
+    transport: ws
+  }
+});
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -15,7 +22,6 @@ module.exports = async (req, res) => {
   }
 
   try {
-    // ✅ ИЗМЕНЕНО: limit = 1000 по умолчанию (чтобы фронтенд получал все чеки)
     const { type, page = 1, limit = 1000 } = req.query;
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
@@ -25,15 +31,11 @@ module.exports = async (req, res) => {
       .from('receipts')
       .select('*', { count: 'exact' });
 
-    // Фильтр по типу документа
     if (type && type !== 'all') {
       query = query.eq('document_type', type);
     }
 
-    // Сортировка по дате создания (новые первые)
     query = query.order('created_at', { ascending: false });
-
-    // Пагинация
     query = query.range(offset, offset + limitNum - 1);
 
     const { data: receipts, error, count } = await query;
