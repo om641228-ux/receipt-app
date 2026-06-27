@@ -11,7 +11,7 @@ function App() {
   const [activeTab, setActiveTab] = useState('upload');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
-  
+
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const [previewUrl, setPreviewUrl] = useState(null);
@@ -21,13 +21,13 @@ function App() {
   const [currency, setCurrency] = useState('AED');
   const [docType, setDocType] = useState('receipt');
   const [showModelSelector, setShowModelSelector] = useState(false);
-  
+
   const [models, setModels] = useState([]);
   const [modelsLoading, setModelsLoading] = useState(false);
-  
+
   const [filterType, setFilterType] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
-  
+
   // === МОДАЛЬНОЕ ОКНО ПРОСМОТРА ===
   const [viewModal, setViewModal] = useState(null);
 
@@ -132,65 +132,46 @@ function App() {
     }
   };
 
+  // ========================================
+  // ✅ ОСНОВНОЙ МЕТОД: Распознавание + Сохранение через FormData
+  // ========================================
   const recognizeAndSave = async () => {
     if (!selectedFiles.length) return;
     setRecognizing(true);
     setLastSavedReceipt(null);
-    
+
     try {
       const file = selectedFiles[currentFileIndex];
-      const base64 = await fileToBase64(file);
-      
-      let endpoint = '/api/identify';
-      if (selectedModel.includes('llama') || selectedModel.includes('qwen') || selectedModel.includes('gpt-oss')) {
-        endpoint = '/api/identify-groq';
-      } else if (selectedModel.includes('claude')) {
-        endpoint = '/api/identify-claude';
-      } else if (selectedModel.includes('ocr')) {
-        endpoint = '/api/identify-ocrspace';
-      }
-      
-      const res = await fetch(`${API_URL}${endpoint}`, {
+
+      // ✅ Создаем FormData для отправки файла
+      const formData = new FormData();
+      formData.append('image', file); // ← файл напрямую, НЕ base64
+      formData.append('model', selectedModel);
+      formData.append('currency', currency);
+      formData.append('docType', docType);
+      formData.append('token', token);
+
+      // ✅ Отправляем FormData на новый endpoint /api/upload-receipt
+      const res = await fetch(`${API_URL}/api/upload-receipt?token=${token}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          image: base64,
-          model: selectedModel,
-          currency: currency,
-          docType: docType
-        })
+        // ❌ НЕ указываем Content-Type — браузер сам установит boundary для multipart
+        body: formData
       });
+
       const data = await res.json();
-      
+
       if (!data.success || !data.data) {
-        throw new Error(data.error || 'Распознавание не удалось');
+        throw new Error(data.error || 'Распознавание или сохранение не удалось');
       }
-      
-      const saveRes = await fetch(`${API_URL}/api/save-receipt?token=${token}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          receipt: data.data,
-          image: base64,
-          docType: docType,
-          recognitionMethod: `${data.provider || endpoint.replace('/api/identify-', '').replace('/api/identify', 'gemini')}:${selectedModel}`,
-          recognizedAt: new Date().toISOString()
-        })
-      });
-      const saveData = await saveRes.json();
-      
-      if (saveData.success && saveData.data) {
-        setLastSavedReceipt(saveData.data);
-        loadReceipts();
-      } else {
-        throw new Error(saveData.error || 'Ошибка сохранения');
-      }
-      
+
+      setLastSavedReceipt(data.data);
+      loadReceipts();
+
     } catch (e) {
       console.error('Ошибка:', e);
       alert('Ошибка: ' + e.message);
     }
-    
+
     setRecognizing(false);
   };
 
@@ -235,38 +216,29 @@ function App() {
         fetch(`${API_URL}/api/list-groq-models`).catch(() => ({ok: false})),
         fetch(`${API_URL}/api/list-ocrspace-models`).catch(() => ({ok: false}))
       ]);
-      
+
       let allModels = [];
-      
+
       if (geminiRes.ok) {
         const geminiData = await geminiRes.json();
         if (geminiData.results) allModels = [...allModels, ...geminiData.results];
       }
-      
+
       if (groqRes.ok) {
         const groqData = await groqRes.json();
         if (groqData.results) allModels = [...allModels, ...groqData.results];
       }
-      
+
       if (ocrRes.ok) {
         const ocrData = await ocrRes.json();
         if (ocrData.results) allModels = [...allModels, ...ocrData.results];
       }
-      
+
       setModels(allModels);
     } catch (e) {
       console.error('Ошибка загрузки моделей:', e);
     }
     setModelsLoading(false);
-  };
-
-  const fileToBase64 = (file) => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
   };
 
   const formatDate = (dateStr) => {
@@ -327,7 +299,7 @@ function App() {
               <h2>📄 Чек #{viewModal.id}</h2>
               <button className="modal-close" onClick={() => setViewModal(null)}>✕</button>
             </div>
-            
+
             <div className="modal-body">
               <div className="modal-image-section">
                 {viewModal.image_url ? (
@@ -336,7 +308,7 @@ function App() {
                   <div className="no-image">Нет фото</div>
                 )}
               </div>
-              
+
               <div className="modal-info">
                 <div className="info-block">
                   <h3>Основная информация</h3>
@@ -348,7 +320,7 @@ function App() {
                   {viewModal.subtotal && <p><strong>Подытог:</strong> {viewModal.subtotal}</p>}
                   {viewModal.tax_amount && <p><strong>Налог:</strong> {viewModal.tax_amount} ({viewModal.tax_rate || ''})</p>}
                 </div>
-                
+
                 <div className="info-block">
                   <h3>Товары ({viewModal.items?.length || 0})</h3>
                   <table className="items-table">
@@ -374,7 +346,7 @@ function App() {
                     </tbody>
                   </table>
                 </div>
-                
+
                 {viewModal.raw_text && (
                   <div className="info-block">
                     <h3>Распознанный текст</h3>
@@ -383,7 +355,7 @@ function App() {
                 )}
               </div>
             </div>
-            
+
             <div className="modal-footer">
               <button onClick={() => setViewModal(null)}>Закрыть</button>
               {user?.role === 'admin' && (
@@ -404,7 +376,7 @@ function App() {
             >
               🤖 {showModelSelector ? 'Скрыть' : `Выбор модели (${models.filter(m => m.status === 'ok').length})`}
             </button>
-            
+
             {showModelSelector && (
               <div className="model-dropdown">
                 {modelsLoading ? (
@@ -433,7 +405,7 @@ function App() {
                 )}
               </div>
             )}
-            
+
             <div className="current-model">
               <small>Модель: <strong>{selectedModel}</strong></small>
             </div>
