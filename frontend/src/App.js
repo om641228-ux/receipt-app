@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import './App.css';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001';
+// ✅ Жёстко прописан URL бэкенда на Railway
+const API_URL = 'https://backend-production-adc7.up.railway.app';
 
 function App() {
   const [receipts, setReceipts] = useState([]);
@@ -16,14 +17,13 @@ function App() {
         return res.json();
       })
       .then(data => {
-        // ✅ ИСПРАВЛЕНО: проверяем формат ответа
         const receiptsArray = data.receipts || data || [];
         setReceipts(Array.isArray(receiptsArray) ? receiptsArray : []);
         setLoading(false);
       })
       .catch(err => {
         console.error('Error fetching receipts:', err);
-        setReceipts([]); // ✅ пустой массив при ошибке
+        setReceipts([]);
         setLoading(false);
       });
   }, []);
@@ -43,9 +43,9 @@ function App() {
             ) : (
               receipts.map(receipt => (
                 <div key={receipt.id} className="receipt-card">
-                  <h3>{receipt.merchant || 'Unknown Merchant'}</h3>
-                  <p>Amount: {receipt.amount} {receipt.currency}</p>
-                  <p>Date: {receipt.date}</p>
+                  <h3>{receipt.store_name_ru || receipt.store_name || 'Unknown Merchant'}</h3>
+                  <p>Amount: {receipt.total_amount} {receipt.currency}</p>
+                  <p>Date: {receipt.receipt_date}</p>
                 </div>
               ))
             )}
