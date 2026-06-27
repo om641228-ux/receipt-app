@@ -36,50 +36,69 @@ module.exports = async (req, res) => {
     console.log('=== SAVE RECEIPT ===');
     console.log('Store:', receipt?.store_name);
     console.log('Has image:', !!image);
-    console.log('Image length:', image ? image.length : 0);
 
     let imageUrl = null;
 
+    // === ЗАГРУЗКА ИЗОБРАЖЕНИЯ ===
     if (image) {
       try {
         const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
         const buffer = Buffer.from(base64Data, 'base64');
         const filename = `receipt-${Date.now()}-${Math.random().toString(36).substring(7)}.jpg`;
         
-        console.log('Uploading to Supabase Storage:', filename);
         console.log('Buffer size:', buffer.length, 'bytes');
+        
+        // 1. Сохраняем локально (всегда)
+        const uploadsDir = path.join(__dirname, '../uploads');
+        if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+        const localPath = path.join(uploadsDir, filename);
+        fs.writeFileSync(localPath, buffer);
+        console.log('✅ Saved locally:', localPath);
+        
+        // 2. Пробуем загрузить в Supabase Storage
+        try {
+          console.log('Uploading to Supabase Storage...');
+          const { data: uploadData, error: uploadError } = await supabase
+            .storage
+            .from('receipts')
+            .upload(filename, buffer, { 
+              contentType: 'image/jpeg', 
+              upsert: false 
+            });
 
-        // Проверяем существование бакета
-        const { data: buckets } = await supabase.storage.listBuckets();
-        console.log('Available buckets:', buckets?.map(b => b.name));
-
-        const { data: uploadData, error: uploadError } = await supabase
-          .storage
-          .from('receipts')
-          .upload(filename, buffer, { 
-            contentType: 'image/jpeg', 
-            upsert: false 
-          });
-
-        if (uploadError) {
-          console.error('❌ Supabase upload error:', uploadError);
-          throw uploadError;
+          if (uploadError) {
+            console.error('❌ Supabase upload error:', uploadError);
+            // Fallback: используем локальный URL
+            imageUrl = `/uploads/${filename}`;
+            console.log('Using local URL:', imageUrl);
+          } else {
+            console.log('✅ Supabase upload success:', uploadData);
+            
+            // Получаем публичный URL
+            const { data: urlData } = supabase
+              .storage
+              .from('receipts')
+              .getPublicUrl(filename);
+            
+            if (urlData && urlData.publicUrl) {
+              imageUrl = urlData.publicUrl;
+              console.log('✅ Public URL:', imageUrl);
+            } else {
+              // Fallback на локальный URL
+              imageUrl = `/uploads/${filename}`;
+              console.log('No public URL, using local:', imageUrl);
+            }
+          }
+        } catch (supabaseErr) {
+          console.error('❌ Supabase error:', supabaseErr.message);
+          // Fallback: используем локальный URL
+          imageUrl = `/uploads/${filename}`;
+          console.log('Using local URL after error:', imageUrl);
         }
-
-        console.log('✅ Upload success:', uploadData);
-
-        const { data: urlData } = supabase
-          .storage
-          .from('receipts')
-          .getPublicUrl(filename);
-
-        imageUrl = urlData?.publicUrl;
-        console.log('✅ Public URL:', imageUrl);
-
+        
       } catch (imgErr) {
-        console.error('❌ Image upload failed:', imgErr.message);
-        console.error('Error details:', imgErr);
-        // Не прерываем — сохраняем чек без фото
+        console.error('❌ Image processing error:', imgErr);
+        // Продолжаем без фото
       }
     }
 
@@ -93,7 +112,7 @@ module.exports = async (req, res) => {
     
     const recognitionMethodFinal = recognitionMethod || receipt.recognition_method || null;
 
-    console.log('Saving to DB with image_url:', imageUrl);
+    console.log('Saving with image_url:', imageUrl);
 
     const { data, error } = await supabase
       .from('receipts')
@@ -124,12 +143,9 @@ module.exports = async (req, res) => {
       .select()
       .single();
 
-    if (error) {
-      console.error('❌ DB insert error:', error);
-      throw error;
-    }
+    if (error) throw error;
 
-    console.log('✅ Saved to DB:', data.id, 'image_url:', data.image_url);
+    console.log('✅ Saved to DB. ID:', data.id, 'image_url:', data.image_url);
 
     res.json({ success: true, data });
   } catch (err) {
