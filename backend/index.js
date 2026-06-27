@@ -7,7 +7,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// CORS — разрешить ВСЕ для начала
+// === CORS ===
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -16,46 +16,57 @@ app.use(cors({
 
 app.use(express.json({ limit: '50mb' }));
 
-// Простая авторизация (без Supabase пока)
-const VALID_PASSWORDS = ['admin', 'user1', 'user2', 'user3', 'user4', 'user5',
-  'user6', 'user7', 'user8', 'user9', 'user10', 'user11', 'user12', 'user13',
-  'user14', 'user15', 'user16', 'user17', 'user18', 'user19', 'user20'];
+// === PASSWORDS ===
+const VALID_PASSWORDS = [
+  'admin', 'user1', 'user2', 'user3', 'user4', 'user5',
+  'user6', 'user7', 'user8', 'user9', 'user10', 'user11',
+  'user12', 'user13', 'user14', 'user15', 'user16', 'user17',
+  'user18', 'user19', 'user20'
+];
 
-// Health check
+// === HEALTH ===
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
-// Login
-app.post('/api/auth/login', (req, res) => {
+// === LOGIN HANDLER ===
+function handleLogin(req, res) {
   const { password } = req.body;
   console.log('Login attempt:', password);
+  
+  if (!password) {
+    return res.status(400).json({ error: 'Password required' });
+  }
   
   if (VALID_PASSWORDS.includes(password)) {
     const token = Buffer.from(password + '_' + Date.now()).toString('base64');
     return res.json({ success: true, token });
   }
   return res.status(401).json({ error: 'Неверный пароль' });
-});
+}
 
-// Verify token
+// === LOGIN ROUTES (оба пути!) ===
+app.post('/api/auth/login', handleLogin);
+app.post('/api/login', handleLogin);
+
+// === VERIFY ===
 app.get('/api/auth/verify', (req, res) => {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'No token' });
   res.json({ valid: true });
 });
 
-// Upload placeholder
+// === UPLOAD ===
 app.post('/api/upload-receipt', (req, res) => {
   res.json({ success: true, message: 'Upload ready' });
 });
 
-// Identify placeholder  
+// === IDENTIFY ===
 app.post('/api/identify', (req, res) => {
   res.json({ success: true, message: 'Identify ready' });
 });
 
-// Error handler
+// === ERROR ===
 app.use((err, req, res, next) => {
   console.error('Error:', err.message);
   res.status(500).json({ error: err.message });
