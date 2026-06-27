@@ -87,14 +87,14 @@ module.exports = async (req, res) => {
         country: receipt.country || null,
         payment_method: receipt.payment_method || null,
         payment_amount: receipt.payment_amount || null,
-        // ❌ УБРАНО: cashier: receipt.cashier || null,
+        cashier: receipt.cashier || null,  // ✅ ВОЗВРАЩЕНО
         items: receipt.items || [],
         image_url: imageUrl,
         raw_text: receipt.raw_text || null,
         document_type: docType || 'receipt',
         recognized_at: recognizedAtFinal,
         recognition_method: recognitionMethodFinal,
-        object: object || null,
+        object: object || null,  // ✅ ВОЗВРАЩЕНО
         owner_id: req.user?.id || req.userId || null,
         owner_name: req.user?.name || req.userName || null
       }])
