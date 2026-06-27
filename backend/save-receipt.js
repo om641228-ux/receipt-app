@@ -33,7 +33,10 @@ module.exports = async (req, res) => {
   
   try {
     const { receipt, image, docType, recognitionMethod, recognizedAt, object } = req.body;
-    console.log('Saving document:', { store: receipt.store_name, type: docType || 'receipt', object: object || null });
+    console.log('=== SAVE RECEIPT ===');
+    console.log('Store:', receipt?.store_name);
+    console.log('Has image:', !!image);
+    console.log('Image length:', image ? image.length : 0);
 
     let imageUrl = null;
 
@@ -43,22 +46,40 @@ module.exports = async (req, res) => {
         const buffer = Buffer.from(base64Data, 'base64');
         const filename = `receipt-${Date.now()}-${Math.random().toString(36).substring(7)}.jpg`;
         
-        const uploadsDir = path.join(__dirname, '../uploads');
-        if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-        fs.writeFileSync(path.join(uploadsDir, filename), buffer);
+        console.log('Uploading to Supabase Storage:', filename);
+        console.log('Buffer size:', buffer.length, 'bytes');
+
+        // Проверяем существование бакета
+        const { data: buckets } = await supabase.storage.listBuckets();
+        console.log('Available buckets:', buckets?.map(b => b.name));
 
         const { data: uploadData, error: uploadError } = await supabase
-          .storage.from('receipts').upload(filename, buffer, { contentType: 'image/jpeg', upsert: false });
+          .storage
+          .from('receipts')
+          .upload(filename, buffer, { 
+            contentType: 'image/jpeg', 
+            upsert: false 
+          });
 
         if (uploadError) {
           console.error('❌ Supabase upload error:', uploadError);
-        } else {
-          const { data: { publicUrl } } = supabase.storage.from('receipts').getPublicUrl(filename);
-          imageUrl = publicUrl;
-          console.log('✅ Supabase URL:', publicUrl);
+          throw uploadError;
         }
+
+        console.log('✅ Upload success:', uploadData);
+
+        const { data: urlData } = supabase
+          .storage
+          .from('receipts')
+          .getPublicUrl(filename);
+
+        imageUrl = urlData?.publicUrl;
+        console.log('✅ Public URL:', imageUrl);
+
       } catch (imgErr) {
-        console.error('❌ Error saving image:', imgErr);
+        console.error('❌ Image upload failed:', imgErr.message);
+        console.error('Error details:', imgErr);
+        // Не прерываем — сохраняем чек без фото
       }
     }
 
@@ -71,6 +92,8 @@ module.exports = async (req, res) => {
     }
     
     const recognitionMethodFinal = recognitionMethod || receipt.recognition_method || null;
+
+    console.log('Saving to DB with image_url:', imageUrl);
 
     const { data, error } = await supabase
       .from('receipts')
@@ -87,24 +110,30 @@ module.exports = async (req, res) => {
         country: receipt.country || null,
         payment_method: receipt.payment_method || null,
         payment_amount: receipt.payment_amount || null,
-        cashier: receipt.cashier || null,  // ✅ ВОЗВРАЩЕНО
+        cashier: receipt.cashier || null,
         items: receipt.items || [],
         image_url: imageUrl,
         raw_text: receipt.raw_text || null,
         document_type: docType || 'receipt',
         recognized_at: recognizedAtFinal,
         recognition_method: recognitionMethodFinal,
-        object: object || null,  // ✅ ВОЗВРАЩЕНО
+        object: object || null,
         owner_id: req.user?.id || req.userId || null,
         owner_name: req.user?.name || req.userName || null
       }])
-      .select().single();
+      .select()
+      .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('❌ DB insert error:', error);
+      throw error;
+    }
+
+    console.log('✅ Saved to DB:', data.id, 'image_url:', data.image_url);
 
     res.json({ success: true, data });
   } catch (err) {
-    console.error('Save Error:', err);
+    console.error('❌ Save Error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 };
