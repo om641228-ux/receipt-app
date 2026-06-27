@@ -28,7 +28,6 @@ function App() {
   const [filterType, setFilterType] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // === МОДАЛЬНОЕ ОКНО ПРОСМОТРА ===
   const [viewModal, setViewModal] = useState(null);
 
   // === LOGIN ===
@@ -54,7 +53,6 @@ function App() {
     }
   };
 
-  // === LOGOUT ===
   const logout = () => {
     setToken(null);
     setUser(null);
@@ -69,7 +67,6 @@ function App() {
     try {
       const res = await fetch(`${API_URL}/api/receipts?token=${authToken}`);
       const data = await res.json();
-      // ✅ Бэкенд возвращает массив напрямую
       setReceipts(Array.isArray(data) ? data : (data.receipts || []));
     } catch (e) {
       console.error('Ошибка загрузки:', e);
@@ -78,13 +75,12 @@ function App() {
     setLoading(false);
   }, [token]);
 
-  // === CHECK AUTH ON LOAD ===
+  // === CHECK AUTH ===
   useEffect(() => {
     if (token) {
       fetch(`${API_URL}/api/me?token=${token}`)
         .then(r => r.json())
         .then(data => {
-          // ✅ Бэкенд возвращает {id, email} без success
           if (data.id || data.valid) {
             setUser(data.user || data);
             loadReceipts(token);
@@ -94,8 +90,6 @@ function App() {
         })
         .catch(err => {
           console.error('Auth check error:', err);
-          // При ошибке соединения — НЕ выходим
-          // Просто оставляем как есть
         });
     }
   }, [token]);
@@ -146,8 +140,6 @@ function App() {
 
     try {
       const file = selectedFiles[currentFileIndex];
-
-      // ✅ Создаем FormData для отправки файла
       const formData = new FormData();
       formData.append('image', file);
       formData.append('model', selectedModel);
@@ -212,49 +204,36 @@ function App() {
     }
   };
 
-  // === LOAD MODELS ===
+  // === LOAD ALL MODELS ===
   const loadModels = async () => {
     setModelsLoading(true);
     try {
-      const [geminiRes, groqRes, ocrRes] = await Promise.all([
-        fetch(`${API_URL}/api/list-gemini-models`).catch(() => ({ok: false})),
-        fetch(`${API_URL}/api/list-groq-models`).catch(() => ({ok: false})),
-        fetch(`${API_URL}/api/list-ocrspace-models`).catch(() => ({ok: false}))
-      ]);
+      const endpoints = [
+        { url: `${API_URL}/api/list-gemini-models`, provider: 'Gemini' },
+        { url: `${API_URL}/api/list-groq-models`, provider: 'Groq' },
+        { url: `${API_URL}/api/list-ocrspace-models`, provider: 'OCR.space' },
+        { url: `${API_URL}/api/list-anthropic-models`, provider: 'Anthropic' },
+        { url: `${API_URL}/api/list-openai-models`, provider: 'OpenAI' }
+      ];
 
       let allModels = [];
 
-      if (geminiRes.ok) {
-        const geminiData = await geminiRes.json();
-        // ✅ Бэкенд возвращает {models: [...]}
-        if (geminiData.models) {
-          allModels = [...allModels, ...geminiData.models.map(m => ({
-            name: m.id,
-            provider: 'Gemini',
-            status: 'ok'
-          }))];
-        }
-      }
-
-      if (groqRes.ok) {
-        const groqData = await groqRes.json();
-        if (groqData.models) {
-          allModels = [...allModels, ...groqData.models.map(m => ({
-            name: m.id,
-            provider: 'Groq',
-            status: 'ok'
-          }))];
-        }
-      }
-
-      if (ocrRes.ok) {
-        const ocrData = await ocrRes.json();
-        if (ocrData.models) {
-          allModels = [...allModels, ...ocrData.models.map(m => ({
-            name: m.id,
-            provider: 'OCR.space',
-            status: 'ok'
-          }))];
+      for (const endpoint of endpoints) {
+        try {
+          const res = await fetch(endpoint.url);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.models) {
+              allModels = [...allModels, ...data.models.map(m => ({
+                name: m.id,
+                displayName: m.name || m.id,
+                provider: endpoint.provider,
+                status: 'ok'
+              }))];
+            }
+          }
+        } catch (e) {
+          console.error(`Error loading ${endpoint.provider}:`, e);
         }
       }
 
@@ -410,15 +389,17 @@ function App() {
                   <div className="models-grid">
                     {models.map(model => (
                       <div 
-                        key={model.name} 
+                        key={`${model.provider}-${model.name}`} 
                         className={`model-option ${selectedModel === model.name ? 'selected' : ''}`}
                         onClick={() => {
                           setSelectedModel(model.name);
                           setShowModelSelector(false);
                         }}
                       >
-                        <span className="provider-badge">{model.provider}</span>
-                        <span className="model-name">{model.name}</span>
+                        <span className={`provider-badge provider-${model.provider.toLowerCase().replace('.', '')}`}>
+                          {model.provider}
+                        </span>
+                        <span className="model-name">{model.displayName}</span>
                         <span className="status-ok">✅</span>
                       </div>
                     ))}
