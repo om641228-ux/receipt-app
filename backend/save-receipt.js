@@ -39,7 +39,6 @@ module.exports = async (req, res) => {
 
     let imageUrl = null;
 
-    // === ЗАГРУЗКА ИЗОБРАЖЕНИЯ ===
     if (image) {
       try {
         const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
@@ -48,14 +47,14 @@ module.exports = async (req, res) => {
         
         console.log('Buffer size:', buffer.length, 'bytes');
         
-        // 1. Сохраняем локально (всегда)
+        // 1. Сохраняем локально (backup)
         const uploadsDir = path.join(__dirname, '../uploads');
         if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
         const localPath = path.join(uploadsDir, filename);
         fs.writeFileSync(localPath, buffer);
         console.log('✅ Saved locally:', localPath);
         
-        // 2. Пробуем загрузить в Supabase Storage
+        // 2. Пробуем загрузить в Supabase Storage (приоритет)
         try {
           console.log('Uploading to Supabase Storage...');
           const { data: uploadData, error: uploadError } = await supabase
@@ -68,11 +67,12 @@ module.exports = async (req, res) => {
 
           if (uploadError) {
             console.error('❌ Supabase upload error:', uploadError);
-            // Fallback: используем локальный URL
-            imageUrl = `/uploads/${filename}`;
+            // Fallback на локальный URL с полным путем
+            const backendUrl = process.env.BACKEND_URL || `https://${req.headers.host}`;
+            imageUrl = `${backendUrl}/uploads/${filename}`;
             console.log('Using local URL:', imageUrl);
           } else {
-            console.log('✅ Supabase upload success:', uploadData);
+            console.log('✅ Supabase upload success');
             
             // Получаем публичный URL
             const { data: urlData } = supabase
@@ -82,23 +82,21 @@ module.exports = async (req, res) => {
             
             if (urlData && urlData.publicUrl) {
               imageUrl = urlData.publicUrl;
-              console.log('✅ Public URL:', imageUrl);
+              console.log('✅ Supabase Public URL:', imageUrl);
             } else {
-              // Fallback на локальный URL
-              imageUrl = `/uploads/${filename}`;
-              console.log('No public URL, using local:', imageUrl);
+              console.error('❌ No public URL returned');
+              const backendUrl = process.env.BACKEND_URL || `https://${req.headers.host}`;
+              imageUrl = `${backendUrl}/uploads/${filename}`;
             }
           }
         } catch (supabaseErr) {
           console.error('❌ Supabase error:', supabaseErr.message);
-          // Fallback: используем локальный URL
-          imageUrl = `/uploads/${filename}`;
-          console.log('Using local URL after error:', imageUrl);
+          const backendUrl = process.env.BACKEND_URL || `https://${req.headers.host}`;
+          imageUrl = `${backendUrl}/uploads/${filename}`;
         }
         
       } catch (imgErr) {
         console.error('❌ Image processing error:', imgErr);
-        // Продолжаем без фото
       }
     }
 
