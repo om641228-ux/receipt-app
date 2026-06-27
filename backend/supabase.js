@@ -1,8 +1,10 @@
 const { createClient } = require('@supabase/supabase-js');
-const WebSocket = require('ws');
+
+// Get environment variables
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 
+// Validate environment variables
 if (!supabaseUrl || !supabaseKey) {
   console.error('❌ Missing Supabase environment variables!');
   console.error('SUPABASE_URL:', supabaseUrl ? 'set' : 'MISSING');
@@ -10,14 +12,7 @@ if (!supabaseUrl || !supabaseKey) {
   process.exit(1);
 }
 
+// Create Supabase client
 const supabase = createClient(supabaseUrl, supabaseKey);
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_ANON_KEY;
 
-const supabase = createClient(supabaseUrl, supabaseKey, {
-  realtime: {
-    transport: WebSocket
-  }
-});
-
-module.exports = { supabase };
+module.exports = supabase;
