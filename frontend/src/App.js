@@ -16,7 +16,6 @@ function App() {
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [recognizing, setRecognizing] = useState(false);
-  const [recognitionResult, setRecognitionResult] = useState(null);
   const [lastSavedReceipt, setLastSavedReceipt] = useState(null);
   const [selectedModel, setSelectedModel] = useState('gemini-2.0-flash-lite');
   const [currency, setCurrency] = useState('AED');
@@ -93,14 +92,13 @@ function App() {
     }
   }, [token, loadReceipts]);
 
-  // === ЗАГРУЗКА ФАЙЛОВ (один или несколько) ===
+  // === ЗАГРУЗКА ФАЙЛОВ ===
   const handleFileSelect = (e) => {
     const files = Array.from(e.target.files);
     if (files.length > 0) {
       setSelectedFiles(files);
       setCurrentFileIndex(0);
       setPreviewUrl(URL.createObjectURL(files[0]));
-      setRecognitionResult(null);
       setLastSavedReceipt(null);
     }
   };
@@ -112,7 +110,6 @@ function App() {
       setSelectedFiles(files);
       setCurrentFileIndex(0);
       setPreviewUrl(URL.createObjectURL(files[0]));
-      setRecognitionResult(null);
       setLastSavedReceipt(null);
     }
   };
@@ -121,7 +118,6 @@ function App() {
     if (currentFileIndex < selectedFiles.length - 1) {
       setCurrentFileIndex(currentFileIndex + 1);
       setPreviewUrl(URL.createObjectURL(selectedFiles[currentFileIndex + 1]));
-      setRecognitionResult(null);
       setLastSavedReceipt(null);
     }
   };
@@ -130,16 +126,14 @@ function App() {
     if (currentFileIndex > 0) {
       setCurrentFileIndex(currentFileIndex - 1);
       setPreviewUrl(URL.createObjectURL(selectedFiles[currentFileIndex - 1]));
-      setRecognitionResult(null);
       setLastSavedReceipt(null);
     }
   };
 
-  // === РАСПОЗНАВАНИЕ ===
-  const recognize = async () => {
+  // === РАСПОЗНАВАНИЕ И СОХРАНЕНИЕ ===
+  const recognizeAndSave = async () => {
     if (!selectedFiles.length) return;
     setRecognizing(true);
-    setRecognitionResult(null);
     setLastSavedReceipt(null);
     
     try {
@@ -156,6 +150,7 @@ function App() {
         endpoint = '/api/identify-ocrspace';
       }
       
+      // 1. Распознаём
       const res = await fetch(`${API_URL}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -167,78 +162,38 @@ function App() {
         })
       });
       const data = await res.json();
-      setRecognitionResult(data);
       
-      if (data.success && data.data) {
-        const saved = await saveReceipt(data.data, base64);
-        if (saved && saved.data) {
-          setLastSavedReceipt(saved.data);
-        }
+      if (!data.success || !data.data) {
+        throw new Error(data.error || 'Распознавание не удалось');
       }
-    } catch (e) {
-      console.error('Ошибка распознавания:', e);
-      setRecognitionResult({ success: false, error: e.message });
-    }
-    
-    setRecognizing(false);
-  };
-
-  const compareRecognize = async () => {
-    if (!selectedFiles.length) return;
-    setRecognizing(true);
-    setRecognitionResult(null);
-    setLastSavedReceipt(null);
-    
-    try {
-      const file = selectedFiles[currentFileIndex];
-      const base64 = await fileToBase64(file);
       
-      const res = await fetch(`${API_URL}/api/compare-recognize`, {
+      // 2. Сохраняем в базу
+      const saveRes = await fetch(`${API_URL}/api/save-receipt?token=${token}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          receipt: data.data,
           image: base64,
-          currency: currency,
-          docType: docType
-        })
-      });
-      const data = await res.json();
-      setRecognitionResult(data);
-      
-      if (data.success && data.saved) {
-        setLastSavedReceipt(data.saved);
-        loadReceipts();
-      }
-    } catch (e) {
-      console.error('Ошибка:', e);
-      setRecognitionResult({ success: false, error: e.message });
-    }
-    
-    setRecognizing(false);
-  };
-
-  const saveReceipt = async (receiptData, image) => {
-    try {
-      const res = await fetch(`${API_URL}/api/save-receipt?token=${token}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          receipt: receiptData,
-          image: image,
           docType: docType,
-          recognitionMethod: `${receiptData.provider || 'unknown'}:${selectedModel}`,
+          recognitionMethod: `${data.provider || endpoint.replace('/api/identify-', '').replace('/api/identify', 'gemini')}:${selectedModel}`,
           recognizedAt: new Date().toISOString()
         })
       });
-      const data = await res.json();
-      if (data.success) {
-        loadReceipts();
+      const saveData = await saveRes.json();
+      
+      if (saveData.success && saveData.data) {
+        setLastSavedReceipt(saveData.data);
+        loadReceipts(); // Обновляем список чеков
+      } else {
+        throw new Error(saveData.error || 'Ошибка сохранения');
       }
-      return data;
+      
     } catch (e) {
-      console.error('Ошибка сохранения:', e);
-      return null;
+      console.error('Ошибка:', e);
+      alert('Ошибка: ' + e.message);
     }
+    
+    setRecognizing(false);
   };
 
   const deleteReceipt = async (id) => {
@@ -410,7 +365,7 @@ function App() {
             </div>
           </div>
 
-          {/* ЗОНА ЗАГРУЗКИ — без directory, просто multiple */}
+          {/* ЗОНА ЗАГРУЗКИ */}
           <div 
             className="drop-zone"
             onDrop={handleDrop}
@@ -465,52 +420,21 @@ function App() {
             </div>
           </div>
 
-          {/* ОДНА КНОПКА РАСПОЗНАТЬ + Сравнить */}
+          {/* ОДНА КНОПКА РАСПОЗНАТЬ */}
           <div className="recognize-bar">
             <button 
-              className="recognize-main-btn"
-              onClick={recognize}
+              className="recognize-main-btn full-width"
+              onClick={recognizeAndSave}
               disabled={!selectedFiles.length || recognizing}
             >
-              {recognizing ? '⏳ Распознавание...' : '🔍 Распознать'}
-            </button>
-            
-            <button 
-              className="recognize-alt-btn compare"
-              onClick={compareRecognize}
-              disabled={!selectedFiles.length || recognizing}
-            >
-              ⚡ Сравнить (Gemini + Groq)
+              {recognizing ? '⏳ Распознавание и сохранение...' : '🔍 Распознать и сохранить'}
             </button>
           </div>
-
-          {/* Результат распознавания */}
-          {recognitionResult && (
-            <div className={`result ${recognitionResult.success ? 'success' : 'error'}`}>
-              {recognitionResult.success ? (
-                <div>
-                  <h3>✅ Распознано</h3>
-                  <p><strong>Магазин:</strong> {recognitionResult.data?.store_name_ru || recognitionResult.data?.store_name}</p>
-                  <p><strong>Дата:</strong> {recognitionResult.data?.date}</p>
-                  <p><strong>Итого:</strong> {recognitionResult.data?.total} {recognitionResult.data?.currency}</p>
-                  <p><strong>Товаров:</strong> {recognitionResult.data?.items?.length || 0}</p>
-                  {recognitionResult.comparison && (
-                    <p><strong>Победитель:</strong> {recognitionResult.comparison.winner}</p>
-                  )}
-                </div>
-              ) : (
-                <div>
-                  <h3>❌ Ошибка распознавания</h3>
-                  <p>{recognitionResult.error}</p>
-                </div>
-              )}
-            </div>
-          )}
 
           {/* КАРТОЧКА СОХРАНЁННОГО ЧЕКА */}
           {lastSavedReceipt && (
             <div className="saved-receipt-card">
-              <h3>✅ Чек сохранён в базе данных</h3>
+              <h3>✅ Чек распознан и сохранён</h3>
               <div className="receipt-preview">
                 {lastSavedReceipt.image_url && (
                   <img src={lastSavedReceipt.image_url} alt="Чек" className="receipt-image" />
@@ -522,6 +446,7 @@ function App() {
                   <p><strong>Итого:</strong> {formatAmount(lastSavedReceipt.total_amount, lastSavedReceipt.currency)}</p>
                   <p><strong>Товаров:</strong> {lastSavedReceipt.items?.length || 0}</p>
                   <p><strong>Метод:</strong> {lastSavedReceipt.recognition_method || '—'}</p>
+                  <p><strong>Тип:</strong> {lastSavedReceipt.document_type}</p>
                 </div>
               </div>
               <div className="receipt-items-preview">
