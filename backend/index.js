@@ -4,14 +4,20 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const { createClient } = require('@supabase/supabase-js');
+const ws = require('ws');  // ← ДОБАВЛЕНО: WebSocket для Node.js 20
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Инициализация Supabase клиента
+// Инициализация Supabase клиента с WebSocket transport для Node.js 20
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY
+  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY,
+  {
+    realtime: {
+      transport: ws  // ← ДОБАВЛЕНО: фикс для Node.js 20
+    }
+  }
 );
 
 // CORS настройки
