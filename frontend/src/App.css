@@ -439,3 +439,102 @@
 .error {
   color: #e74c3c;
 }
+/* ... предыдущие стили ... */
+
+/* Карточка сохранённого чека */
+.saved-receipt-card {
+  background: #d4edda;
+  border: 3px solid #27ae60;
+  border-radius: 12px;
+  padding: 20px;
+  margin-top: 20px;
+  animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(-20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.saved-receipt-card h3 {
+  margin-top: 0;
+  color: #27ae60;
+  font-size: 18px;
+}
+
+.receipt-preview {
+  display: flex;
+  gap: 20px;
+  margin: 15px 0;
+  flex-wrap: wrap;
+}
+
+.receipt-image {
+  max-width: 250px;
+  max-height: 350px;
+  border-radius: 8px;
+  object-fit: contain;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.receipt-info {
+  flex: 1;
+  min-width: 200px;
+}
+
+.receipt-info p {
+  margin: 8px 0;
+  font-size: 14px;
+}
+
+.receipt-info strong {
+  color: #2c3e50;
+}
+
+.receipt-items-preview {
+  background: white;
+  padding: 15px;
+  border-radius: 8px;
+  margin: 15px 0;
+}
+
+.receipt-items-preview h4 {
+  margin-top: 0;
+  color: #2c3e50;
+}
+
+.receipt-items-preview ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.receipt-items-preview li {
+  padding: 5px 0;
+  border-bottom: 1px solid #eee;
+  font-size: 13px;
+}
+
+.close-btn {
+  padding: 10px 20px;
+  background: #3498db;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+/* Модели */
+.model-option.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.status-error {
+  color: #e74c3c;
+}
+
+/* Загрузка папки */
+.drop-zone input[webkitdirectory] {
+  display: none;
+}

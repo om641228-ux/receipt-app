@@ -4,7 +4,6 @@ import './App.css';
 const API_URL = 'https://backend-production-adc7.up.railway.app';
 
 function App() {
-  // === СОСТОЯНИЯ ===
   const [token, setToken] = useState(localStorage.getItem('token') || null);
   const [user, setUser] = useState(null);
   const [receipts, setReceipts] = useState([]);
@@ -13,22 +12,20 @@ function App() {
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   
-  // Загрузка
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [recognizing, setRecognizing] = useState(false);
   const [recognitionResult, setRecognitionResult] = useState(null);
+  const [lastSavedReceipt, setLastSavedReceipt] = useState(null);
   const [selectedModel, setSelectedModel] = useState('gemini-2.0-flash-lite');
   const [currency, setCurrency] = useState('AED');
   const [docType, setDocType] = useState('receipt');
   const [showModelSelector, setShowModelSelector] = useState(false);
   
-  // Модели
   const [models, setModels] = useState([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   
-  // Фильтры
   const [filterType, setFilterType] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -106,6 +103,7 @@ function App() {
       setCurrentFileIndex(0);
       setPreviewUrl(URL.createObjectURL(files[0]));
       setRecognitionResult(null);
+      setLastSavedReceipt(null);
     }
   };
 
@@ -117,6 +115,7 @@ function App() {
       setCurrentFileIndex(0);
       setPreviewUrl(URL.createObjectURL(files[0]));
       setRecognitionResult(null);
+      setLastSavedReceipt(null);
     }
   };
 
@@ -125,6 +124,7 @@ function App() {
       setCurrentFileIndex(currentFileIndex + 1);
       setPreviewUrl(URL.createObjectURL(selectedFiles[currentFileIndex + 1]));
       setRecognitionResult(null);
+      setLastSavedReceipt(null);
     }
   };
 
@@ -133,6 +133,7 @@ function App() {
       setCurrentFileIndex(currentFileIndex - 1);
       setPreviewUrl(URL.createObjectURL(selectedFiles[currentFileIndex - 1]));
       setRecognitionResult(null);
+      setLastSavedReceipt(null);
     }
   };
 
@@ -140,6 +141,8 @@ function App() {
   const recognizeCurrent = async () => {
     if (!selectedFiles.length) return;
     setRecognizing(true);
+    setRecognitionResult(null);
+    setLastSavedReceipt(null);
     
     try {
       const file = selectedFiles[currentFileIndex];
@@ -158,7 +161,10 @@ function App() {
       setRecognitionResult(data);
       
       if (data.success && data.data) {
-        await saveReceipt(data.data, base64);
+        const saved = await saveReceipt(data.data, base64);
+        if (saved && saved.data) {
+          setLastSavedReceipt(saved.data);
+        }
       }
     } catch (e) {
       console.error('Ошибка распознавания:', e);
@@ -171,6 +177,8 @@ function App() {
   const recognizeWithModel = async (endpoint) => {
     if (!selectedFiles.length) return;
     setRecognizing(true);
+    setRecognitionResult(null);
+    setLastSavedReceipt(null);
     
     try {
       const file = selectedFiles[currentFileIndex];
@@ -190,7 +198,10 @@ function App() {
       setRecognitionResult(data);
       
       if (data.success && data.data) {
-        await saveReceipt(data.data, base64);
+        const saved = await saveReceipt(data.data, base64);
+        if (saved && saved.data) {
+          setLastSavedReceipt(saved.data);
+        }
       }
     } catch (e) {
       console.error('Ошибка:', e);
@@ -203,6 +214,8 @@ function App() {
   const compareRecognize = async () => {
     if (!selectedFiles.length) return;
     setRecognizing(true);
+    setRecognitionResult(null);
+    setLastSavedReceipt(null);
     
     try {
       const file = selectedFiles[currentFileIndex];
@@ -221,6 +234,7 @@ function App() {
       setRecognitionResult(data);
       
       if (data.success && data.saved) {
+        setLastSavedReceipt(data.saved);
         loadReceipts();
       }
     } catch (e) {
@@ -252,6 +266,7 @@ function App() {
       return data;
     } catch (e) {
       console.error('Ошибка сохранения:', e);
+      return null;
     }
   };
 
@@ -293,11 +308,32 @@ function App() {
   const loadModels = async () => {
     setModelsLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/list-and-test-models`);
-      const data = await res.json();
-      setModels(data.results || []);
+      const [geminiRes, groqRes, ocrRes] = await Promise.all([
+        fetch(`${API_URL}/api/list-gemini-models`).catch(() => ({ok: false})),
+        fetch(`${API_URL}/api/list-groq-models`).catch(() => ({ok: false})),
+        fetch(`${API_URL}/api/list-ocrspace-models`).catch(() => ({ok: false}))
+      ]);
+      
+      let allModels = [];
+      
+      if (geminiRes.ok) {
+        const geminiData = await geminiRes.json();
+        if (geminiData.results) allModels = [...allModels, ...geminiData.results];
+      }
+      
+      if (groqRes.ok) {
+        const groqData = await groqRes.json();
+        if (groqData.results) allModels = [...allModels, ...groqData.results];
+      }
+      
+      if (ocrRes.ok) {
+        const ocrData = await ocrRes.json();
+        if (ocrData.results) allModels = [...allModels, ...ocrData.results];
+      }
+      
+      setModels(allModels);
     } catch (e) {
-      console.error('Ошибка:', e);
+      console.error('Ошибка загрузки моделей:', e);
     }
     setModelsLoading(false);
   };
@@ -345,7 +381,6 @@ function App() {
 
   return (
     <div className="App">
-      {/* === МИНИМАЛЬНЫЙ ХЕДЕР === */}
       <header className="mini-header">
         <div className="header-left">
           <span className="logo-icon">🧾</span>
@@ -355,7 +390,6 @@ function App() {
         </div>
       </header>
 
-      {/* === ТАБЫ === */}
       <nav className="tabs">
         <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>
           📤 Загрузка
@@ -368,13 +402,12 @@ function App() {
       {/* === ВКЛАДКА ЗАГРУЗКА === */}
       {activeTab === 'upload' && (
         <div className="upload-section">
-          {/* Верхняя панель с выбором модели */}
           <div className="top-controls">
             <button 
               className="model-toggle-btn"
               onClick={() => {setShowModelSelector(!showModelSelector); if (!models.length) loadModels();}}
             >
-              🤖 {showModelSelector ? 'Скрыть модели' : 'Выбор модели'}
+              🤖 {showModelSelector ? 'Скрыть модели' : `Выбор модели (${models.filter(m => m.status === 'ok').length} доступно)`}
             </button>
             
             {showModelSelector && (
@@ -383,44 +416,34 @@ function App() {
                   <p>Загрузка моделей...</p>
                 ) : (
                   <div className="models-grid">
-                    {models.filter(m => m.status === 'ok').map(model => (
+                    {models.map(model => (
                       <div 
                         key={model.name} 
-                        className={`model-option ${selectedModel === model.name ? 'selected' : ''}`}
-                        onClick={() => {setSelectedModel(model.name); setShowModelSelector(false);}}
+                        className={`model-option ${selectedModel === model.name ? 'selected' : ''} ${model.status !== 'ok' ? 'disabled' : ''}`}
+                        onClick={() => {
+                          if (model.status === 'ok') {
+                            setSelectedModel(model.name);
+                            setShowModelSelector(false);
+                          }
+                        }}
                       >
                         <span className="provider-badge">{model.provider}</span>
                         <span className="model-name">{model.name}</span>
-                        <span className="status-ok">✅</span>
+                        <span className={model.status === 'ok' ? 'status-ok' : 'status-error'}>
+                          {model.status === 'ok' ? '✅' : '❌'}
+                        </span>
                       </div>
                     ))}
-                    <div className="model-option" onClick={() => {setSelectedModel('gemini-2.0-flash-lite'); setShowModelSelector(false);}}>
-                      <span className="provider-badge">Gemini</span>
-                      <span className="model-name">gemini-2.0-flash-lite</span>
-                    </div>
-                    <div className="model-option" onClick={() => {setSelectedModel('meta-llama/llama-4-scout-17b-16e-instruct'); setShowModelSelector(false);}}>
-                      <span className="provider-badge">Groq</span>
-                      <span className="model-name">llama-4-scout</span>
-                    </div>
-                    <div className="model-option" onClick={() => {setSelectedModel('claude-sonnet-4-20250514'); setShowModelSelector(false);}}>
-                      <span className="provider-badge">Claude</span>
-                      <span className="model-name">claude-sonnet-4</span>
-                    </div>
-                    <div className="model-option" onClick={() => {setSelectedModel('ocr-engine-2'); setShowModelSelector(false);}}>
-                      <span className="provider-badge">OCR</span>
-                      <span className="model-name">OCR.Space Engine 2</span>
-                    </div>
                   </div>
                 )}
               </div>
             )}
             
             <div className="current-model">
-              <small>Модель: <strong>{selectedModel}</strong></small>
+              <small>Выбрана: <strong>{selectedModel}</strong></small>
             </div>
           </div>
 
-          {/* Зона загрузки */}
           <div 
             className="drop-zone"
             onDrop={handleDrop}
@@ -430,6 +453,8 @@ function App() {
               type="file" 
               accept="image/*" 
               multiple
+              webkitdirectory="true"
+              directory="true"
               onChange={handleFileSelect} 
               id="file-input" 
             />
@@ -448,14 +473,13 @@ function App() {
               ) : (
                 <div className="drop-text">
                   <p>📷 Перетащите фото чека сюда</p>
-                  <p>или нажмите для выбора файлов</p>
-                  <p className="hint">Можно выбрать несколько файлов (папка)</p>
+                  <p>или нажмите для выбора файлов/папки</p>
+                  <p className="hint">Можно выбрать несколько файлов или папку</p>
                 </div>
               )}
             </label>
           </div>
 
-          {/* Настройки */}
           <div className="controls-row">
             <div className="control-group">
               <label>Валюта:</label>
@@ -476,26 +500,49 @@ function App() {
             </div>
           </div>
 
-          {/* Кнопка РАСПОЗНАТЬ */}
           <div className="recognize-bar">
             <button 
               className="recognize-main-btn"
               onClick={recognizeCurrent}
               disabled={!selectedFiles.length || recognizing}
             >
-              {recognizing ? '⏳ Распознавание...' : '🔍 Распознать'}
+              {recognizing ? '⏳ Распознавание...' : '🔍 Распознать (Gemini)'}
             </button>
             
             <button 
               className="recognize-alt-btn"
+              onClick={() => recognizeWithModel('/api/identify-groq')}
+              disabled={!selectedFiles.length || recognizing}
+            >
+              ⚡ Groq
+            </button>
+            
+            <button 
+              className="recognize-alt-btn"
+              onClick={() => recognizeWithModel('/api/identify-claude')}
+              disabled={!selectedFiles.length || recognizing}
+            >
+              🎨 Claude
+            </button>
+            
+            <button 
+              className="recognize-alt-btn"
+              onClick={() => recognizeWithModel('/api/identify-ocrspace')}
+              disabled={!selectedFiles.length || recognizing}
+            >
+              📷 OCR
+            </button>
+            
+            <button 
+              className="recognize-alt-btn compare"
               onClick={compareRecognize}
               disabled={!selectedFiles.length || recognizing}
             >
-              ⚡ Сравнить
+              🔍 Сравнить
             </button>
           </div>
 
-          {/* Результат */}
+          {/* Результат распознавания */}
           {recognitionResult && (
             <div className={`result ${recognitionResult.success ? 'success' : 'error'}`}>
               {recognitionResult.success ? (
@@ -511,10 +558,45 @@ function App() {
                 </div>
               ) : (
                 <div>
-                  <h3>❌ Ошибка</h3>
+                  <h3>❌ Ошибка распознавания</h3>
                   <p>{recognitionResult.error}</p>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* КАРТОЧКА СОХРАНЁННОГО ЧЕКА ИЗ БАЗЫ */}
+          {lastSavedReceipt && (
+            <div className="saved-receipt-card">
+              <h3>✅ Чек сохранён в базе данных</h3>
+              <div className="receipt-preview">
+                {lastSavedReceipt.image_url && (
+                  <img src={lastSavedReceipt.image_url} alt="Чек" className="receipt-image" />
+                )}
+                <div className="receipt-info">
+                  <p><strong>ID:</strong> {lastSavedReceipt.id}</p>
+                  <p><strong>Магазин:</strong> {lastSavedReceipt.store_name_ru || lastSavedReceipt.store_name || '—'}</p>
+                  <p><strong>Дата:</strong> {formatDate(lastSavedReceipt.receipt_date)} {lastSavedReceipt.receipt_time}</p>
+                  <p><strong>Итого:</strong> {formatAmount(lastSavedReceipt.total_amount, lastSavedReceipt.currency)}</p>
+                  <p><strong>Товаров:</strong> {lastSavedReceipt.items?.length || 0}</p>
+                  <p><strong>Метод:</strong> {lastSavedReceipt.recognition_method || '—'}</p>
+                  <p><strong>Тип:</strong> {lastSavedReceipt.document_type}</p>
+                </div>
+              </div>
+              <div className="receipt-items-preview">
+                <h4>Товары:</h4>
+                <ul>
+                  {(lastSavedReceipt.items || []).slice(0, 5).map((item, i) => (
+                    <li key={i}>
+                      {item.name_ru || item.name} — {item.quantity} × {item.price} = {item.total}
+                    </li>
+                  ))}
+                  {(lastSavedReceipt.items || []).length > 5 && (
+                    <li>... и ещё {(lastSavedReceipt.items || []).length - 5} товаров</li>
+                  )}
+                </ul>
+              </div>
+              <button className="close-btn" onClick={() => setLastSavedReceipt(null)}>Закрыть</button>
             </div>
           )}
         </div>
