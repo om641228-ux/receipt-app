@@ -64,12 +64,12 @@ module.exports = async (req, res) => {
 
     const formattedDate = parseDate(receipt.date);
     const formattedTime = parseTime(receipt.time);
-    // ДАТА РАСПОЗНАВАНИЯ: берём с устройства (если прислал фронт и значение валидно), иначе серверное время
+    
     let recognizedAtFinal = new Date().toISOString();
     if (recognizedAt && !isNaN(new Date(recognizedAt).getTime())) {
       recognizedAtFinal = new Date(recognizedAt).toISOString();
     }
-    // МЕТОД/МОДЕЛЬ РАСПОЗНАВАНИЯ: из фронта (например "Groq: meta-llama/...") или из самого чека
+    
     const recognitionMethodFinal = recognitionMethod || receipt.recognition_method || null;
 
     const { data, error } = await supabase
@@ -87,16 +87,16 @@ module.exports = async (req, res) => {
         country: receipt.country || null,
         payment_method: receipt.payment_method || null,
         payment_amount: receipt.payment_amount || null,
-        cashier: receipt.cashier || null,
+        // ❌ УБРАНО: cashier: receipt.cashier || null,
         items: receipt.items || [],
         image_url: imageUrl,
         raw_text: receipt.raw_text || null,
         document_type: docType || 'receipt',
-        recognized_at: recognizedAtFinal, // дата распознавания
-        recognition_method: recognitionMethodFinal, // провайдер + модель
-        object: object || null, // ОБЪЕКТ (проект)
-        owner_id: req.userId || null, // КТО ДОБАВИЛ (id) — из авторизации
-        owner_name: req.userName || null // КТО ДОБАВИЛ (имя) — для вывода в карточке
+        recognized_at: recognizedAtFinal,
+        recognition_method: recognitionMethodFinal,
+        object: object || null,
+        owner_id: req.user?.id || req.userId || null,
+        owner_name: req.user?.name || req.userName || null
       }])
       .select().single();
 
