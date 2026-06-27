@@ -1,0 +1,18 @@
+{
+  "name": "receipt-manager-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-scripts": "5.0.1"
+  },
+  "scripts": {
+    "start": "serve -s build -l ${PORT:-3000}",
+    "build": "react-scripts build",
+    "dev": "react-scripts start"
+  },
+  "devDependencies": {
+    "serve": "^14.2.0"
+  }
+}
