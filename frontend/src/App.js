@@ -29,7 +29,6 @@ function App() {
   const [filterType, setFilterType] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // === АВТОРИЗАЦИЯ ===
   const login = async () => {
     try {
       const res = await fetch(`${API_URL}/api/login`, {
@@ -66,7 +65,6 @@ function App() {
     setReceipts([]);
   };
 
-  // === ЗАГРУЗКА ЧЕКОВ ===
   const loadReceipts = useCallback(async (authToken = token) => {
     if (!authToken) return;
     setLoading(true);
@@ -95,7 +93,7 @@ function App() {
     }
   }, [token, loadReceipts]);
 
-  // === ЗАГРУЗКА ФАЙЛОВ ===
+  // === ЗАГРУЗКА ФАЙЛОВ (один или несколько) ===
   const handleFileSelect = (e) => {
     const files = Array.from(e.target.files);
     if (files.length > 0) {
@@ -138,7 +136,7 @@ function App() {
   };
 
   // === РАСПОЗНАВАНИЕ ===
-  const recognizeCurrent = async () => {
+  const recognize = async () => {
     if (!selectedFiles.length) return;
     setRecognizing(true);
     setRecognitionResult(null);
@@ -148,41 +146,15 @@ function App() {
       const file = selectedFiles[currentFileIndex];
       const base64 = await fileToBase64(file);
       
-      const res = await fetch(`${API_URL}/api/identify`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          image: base64,
-          model: selectedModel,
-          currency: currency
-        })
-      });
-      const data = await res.json();
-      setRecognitionResult(data);
-      
-      if (data.success && data.data) {
-        const saved = await saveReceipt(data.data, base64);
-        if (saved && saved.data) {
-          setLastSavedReceipt(saved.data);
-        }
+      // Определяем endpoint по выбранной модели
+      let endpoint = '/api/identify';
+      if (selectedModel.includes('llama') || selectedModel.includes('qwen') || selectedModel.includes('gpt-oss')) {
+        endpoint = '/api/identify-groq';
+      } else if (selectedModel.includes('claude')) {
+        endpoint = '/api/identify-claude';
+      } else if (selectedModel.includes('ocr')) {
+        endpoint = '/api/identify-ocrspace';
       }
-    } catch (e) {
-      console.error('Ошибка распознавания:', e);
-      setRecognitionResult({ success: false, error: e.message });
-    }
-    
-    setRecognizing(false);
-  };
-
-  const recognizeWithModel = async (endpoint) => {
-    if (!selectedFiles.length) return;
-    setRecognizing(true);
-    setRecognitionResult(null);
-    setLastSavedReceipt(null);
-    
-    try {
-      const file = selectedFiles[currentFileIndex];
-      const base64 = await fileToBase64(file);
       
       const res = await fetch(`${API_URL}${endpoint}`, {
         method: 'POST',
@@ -204,7 +176,7 @@ function App() {
         }
       }
     } catch (e) {
-      console.error('Ошибка:', e);
+      console.error('Ошибка распознавания:', e);
       setRecognitionResult({ success: false, error: e.message });
     }
     
@@ -245,7 +217,6 @@ function App() {
     setRecognizing(false);
   };
 
-  // === СОХРАНЕНИЕ ===
   const saveReceipt = async (receiptData, image) => {
     try {
       const res = await fetch(`${API_URL}/api/save-receipt?token=${token}`, {
@@ -270,7 +241,6 @@ function App() {
     }
   };
 
-  // === УДАЛЕНИЕ ===
   const deleteReceipt = async (id) => {
     if (!window.confirm('Удалить чек?')) return;
     try {
@@ -285,7 +255,6 @@ function App() {
     }
   };
 
-  // === ЭКСПОРТ ===
   const exportExcel = async () => {
     try {
       const res = await fetch(`${API_URL}/api/export-excel?token=${token}`, {
@@ -304,7 +273,6 @@ function App() {
     }
   };
 
-  // === МОДЕЛИ ===
   const loadModels = async () => {
     setModelsLoading(true);
     try {
@@ -338,7 +306,6 @@ function App() {
     setModelsLoading(false);
   };
 
-  // === УТИЛИТЫ ===
   const fileToBase64 = (file) => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -358,7 +325,6 @@ function App() {
     return `${parseFloat(amount).toFixed(2)} ${currency || ''}`;
   };
 
-  // === РЕНДЕР ===
   if (!token) {
     return (
       <div className="App">
@@ -407,13 +373,13 @@ function App() {
               className="model-toggle-btn"
               onClick={() => {setShowModelSelector(!showModelSelector); if (!models.length) loadModels();}}
             >
-              🤖 {showModelSelector ? 'Скрыть модели' : `Выбор модели (${models.filter(m => m.status === 'ok').length} доступно)`}
+              🤖 {showModelSelector ? 'Скрыть' : `Выбор модели (${models.filter(m => m.status === 'ok').length})`}
             </button>
             
             {showModelSelector && (
               <div className="model-dropdown">
                 {modelsLoading ? (
-                  <p>Загрузка моделей...</p>
+                  <p>Загрузка...</p>
                 ) : (
                   <div className="models-grid">
                     {models.map(model => (
@@ -440,10 +406,11 @@ function App() {
             )}
             
             <div className="current-model">
-              <small>Выбрана: <strong>{selectedModel}</strong></small>
+              <small>Модель: <strong>{selectedModel}</strong></small>
             </div>
           </div>
 
+          {/* ЗОНА ЗАГРУЗКИ — без directory, просто multiple */}
           <div 
             className="drop-zone"
             onDrop={handleDrop}
@@ -453,8 +420,6 @@ function App() {
               type="file" 
               accept="image/*" 
               multiple
-              webkitdirectory="true"
-              directory="true"
               onChange={handleFileSelect} 
               id="file-input" 
             />
@@ -473,8 +438,8 @@ function App() {
               ) : (
                 <div className="drop-text">
                   <p>📷 Перетащите фото чека сюда</p>
-                  <p>или нажмите для выбора файлов/папки</p>
-                  <p className="hint">Можно выбрать несколько файлов или папку</p>
+                  <p>или нажмите для выбора файлов</p>
+                  <p className="hint">Можно выбрать несколько файлов</p>
                 </div>
               )}
             </label>
@@ -500,37 +465,14 @@ function App() {
             </div>
           </div>
 
+          {/* ОДНА КНОПКА РАСПОЗНАТЬ + Сравнить */}
           <div className="recognize-bar">
             <button 
               className="recognize-main-btn"
-              onClick={recognizeCurrent}
+              onClick={recognize}
               disabled={!selectedFiles.length || recognizing}
             >
-              {recognizing ? '⏳ Распознавание...' : '🔍 Распознать (Gemini)'}
-            </button>
-            
-            <button 
-              className="recognize-alt-btn"
-              onClick={() => recognizeWithModel('/api/identify-groq')}
-              disabled={!selectedFiles.length || recognizing}
-            >
-              ⚡ Groq
-            </button>
-            
-            <button 
-              className="recognize-alt-btn"
-              onClick={() => recognizeWithModel('/api/identify-claude')}
-              disabled={!selectedFiles.length || recognizing}
-            >
-              🎨 Claude
-            </button>
-            
-            <button 
-              className="recognize-alt-btn"
-              onClick={() => recognizeWithModel('/api/identify-ocrspace')}
-              disabled={!selectedFiles.length || recognizing}
-            >
-              📷 OCR
+              {recognizing ? '⏳ Распознавание...' : '🔍 Распознать'}
             </button>
             
             <button 
@@ -538,7 +480,7 @@ function App() {
               onClick={compareRecognize}
               disabled={!selectedFiles.length || recognizing}
             >
-              🔍 Сравнить
+              ⚡ Сравнить (Gemini + Groq)
             </button>
           </div>
 
@@ -565,7 +507,7 @@ function App() {
             </div>
           )}
 
-          {/* КАРТОЧКА СОХРАНЁННОГО ЧЕКА ИЗ БАЗЫ */}
+          {/* КАРТОЧКА СОХРАНЁННОГО ЧЕКА */}
           {lastSavedReceipt && (
             <div className="saved-receipt-card">
               <h3>✅ Чек сохранён в базе данных</h3>
@@ -580,7 +522,6 @@ function App() {
                   <p><strong>Итого:</strong> {formatAmount(lastSavedReceipt.total_amount, lastSavedReceipt.currency)}</p>
                   <p><strong>Товаров:</strong> {lastSavedReceipt.items?.length || 0}</p>
                   <p><strong>Метод:</strong> {lastSavedReceipt.recognition_method || '—'}</p>
-                  <p><strong>Тип:</strong> {lastSavedReceipt.document_type}</p>
                 </div>
               </div>
               <div className="receipt-items-preview">
