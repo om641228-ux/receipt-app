@@ -9,13 +9,21 @@ function App() {
 
   useEffect(() => {
     fetch(`${API_URL}/api/receipts`)
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`);
+        }
+        return res.json();
+      })
       .then(data => {
-        setReceipts(data);
+        // ✅ ИСПРАВЛЕНО: проверяем формат ответа
+        const receiptsArray = data.receipts || data || [];
+        setReceipts(Array.isArray(receiptsArray) ? receiptsArray : []);
         setLoading(false);
       })
       .catch(err => {
         console.error('Error fetching receipts:', err);
+        setReceipts([]); // ✅ пустой массив при ошибке
         setLoading(false);
       });
   }, []);

@@ -268,26 +268,28 @@ app.use('/api/list-and-test-models', require('./list-and-test-models'));
 app.use('/api/compare-recognize', require('./compare-recognize'));
 
 // ✅ Простая авторизация по паролю + владение чеками (auth-owners.js)
-// Даёт /api/login, /api/logout, /api/me, /api/owners, /api/set-owner, /api/remove-owner
 const authOwners = require('./auth-owners');
-const requireAuthAO = authOwners.requireAuth;       // авторизация по токену из ACCOUNTS
-const requireAdminAO = authOwners.requireAdmin;     // роль admin
-const scopeReceiptsByOwner = authOwners.scopeReceiptsByOwner; // не-админ видит только свои чеки
+const requireAuthAO = authOwners.requireAuth;
+const requireAdminAO = authOwners.requireAdmin;
+const scopeReceiptsByOwner = authOwners.scopeReceiptsByOwner;
 app.use('/api', authOwners);
 
-// ✅ Защищённые роуты (требуют авторизации по токену auth-owners)
+// ✅ Защищённые роуты (требуют авторизации)
 app.use('/api/upload-file', requireAuthAO, logRequest, require('./upload-file'));
 app.use('/api/upload-folder', requireAuthAO, logRequest, require('./upload-folder'));
 app.use('/api/save-receipt', requireAuthAO, logRequest, require('./save-receipt'));
-app.use('/api/receipts', requireAuthAO, scopeReceiptsByOwner, logRequest, require('./receipts'));
+
+// ✅ ОТКЛЮЧЕНА АВТОРИЗАЦИЯ для /api/receipts — публичный доступ
+app.use('/api/receipts', require('./receipts'));
+
 app.use('/api/update-receipt-currency', requireAuthAO, logRequest, require('./update-receipt-currency'));
 app.use('/api/reprocess-receipt', requireAuthAO, logRequest, require('./reprocess-receipt'));
 app.use('/api/reprocess-unrecognized', requireAuthAO, logRequest, require('./reprocess-unrecognized'));
 
-// ✅ Экспорт доступен всем авторизованным (не-админу — только свои чеки, фильтруется внутри export-excel.js)
+// ✅ Экспорт доступен всем авторизованным
 app.use('/api/export-excel', requireAuthAO, logRequest, require('./export-excel'));
 
-// ✅ Админские роуты (требуют роль admin)
+// ✅ Админские роуты
 app.use('/api/delete-receipt/:id', requireAuthAO, requireAdminAO, logRequest, require('./delete-receipt'));
 
 // Обработка ошибок
