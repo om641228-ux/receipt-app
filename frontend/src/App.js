@@ -3,6 +3,12 @@ import './App.css';
 
 const API_URL = 'https://backend-production-adc7.up.railway.app';
 
+// Хелпер: убираем http:// для изображений (Mixed Content)
+const fixImageUrl = (url) => {
+  if (!url) return null;
+  return url.replace(/^http:\/\//, 'https://');
+};
+
 function App() {
   const [token, setToken] = useState(localStorage.getItem('token') || null);
   const [user, setUser] = useState(null);
@@ -14,6 +20,7 @@ function App() {
 
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [currentFileIndex, setCurrentFileIndex] = useState(0);
+  const [previewUrls, setPreviewUrls] = useState([]);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [recognizing, setRecognizing] = useState(false);
   const [lastSavedReceipt, setLastSavedReceipt] = useState(null);
@@ -29,6 +36,13 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
 
   const [viewModal, setViewModal] = useState(null);
+
+  // === ОЧИСТКА PREVIEW URL (утечки памяти) ===
+  useEffect(() => {
+    return () => {
+      previewUrls.forEach(url => URL.revokeObjectURL(url));
+    };
+  }, [previewUrls]);
 
   // === LOGIN ===
   const login = async () => {
@@ -67,7 +81,13 @@ function App() {
     try {
       const res = await fetch(`${API_URL}/api/receipts?token=${authToken}`);
       const data = await res.json();
-      setReceipts(Array.isArray(data) ? data : (data.receipts || []));
+      const raw = Array.isArray(data) ? data : (data.receipts || []);
+      // Фикс Mixed Content для всех image_url
+      const processed = raw.map(r => ({
+        ...r,
+        image_url: fixImageUrl(r.image_url)
+      }));
+      setReceipts(processed);
     } catch (e) {
       console.error('Ошибка загрузки:', e);
       setReceipts([]);
@@ -97,11 +117,14 @@ function App() {
 
   // === FILE HANDLERS ===
   const handleFileSelect = (e) => {
-    const files = Array.from(e.target.files);
+    const files = Array.from(e.target.files).filter(f => f.type.startsWith('image/'));
     if (files.length > 0) {
+      previewUrls.forEach(url => URL.revokeObjectURL(url));
+      const urls = files.map(f => URL.createObjectURL(f));
       setSelectedFiles(files);
       setCurrentFileIndex(0);
-      setPreviewUrl(URL.createObjectURL(files[0]));
+      setPreviewUrls(urls);
+      setPreviewUrl(urls[0]);
       setLastSavedReceipt(null);
     }
   };
@@ -110,9 +133,12 @@ function App() {
     e.preventDefault();
     const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
     if (files.length > 0) {
+      previewUrls.forEach(url => URL.revokeObjectURL(url));
+      const urls = files.map(f => URL.createObjectURL(f));
       setSelectedFiles(files);
       setCurrentFileIndex(0);
-      setPreviewUrl(URL.createObjectURL(files[0]));
+      setPreviewUrls(urls);
+      setPreviewUrl(urls[0]);
       setLastSavedReceipt(null);
     }
   };
@@ -120,7 +146,7 @@ function App() {
   const nextFile = () => {
     if (currentFileIndex < selectedFiles.length - 1) {
       setCurrentFileIndex(currentFileIndex + 1);
-      setPreviewUrl(URL.createObjectURL(selectedFiles[currentFileIndex + 1]));
+      setPreviewUrl(previewUrls[currentFileIndex + 1]);
       setLastSavedReceipt(null);
     }
   };
@@ -128,12 +154,12 @@ function App() {
   const prevFile = () => {
     if (currentFileIndex > 0) {
       setCurrentFileIndex(currentFileIndex - 1);
-      setPreviewUrl(URL.createObjectURL(selectedFiles[currentFileIndex - 1]));
+      setPreviewUrl(previewUrls[currentFileIndex - 1]);
       setLastSavedReceipt(null);
     }
   };
 
-  // === RECOGNIZE AND SAVE ===
+  // === RECOGNIZE AND SAVE (FORMDATA!) ===
   const recognizeAndSave = async () => {
     if (!selectedFiles.length) return;
     setRecognizing(true);
@@ -142,33 +168,39 @@ function App() {
     try {
       const file = selectedFiles[currentFileIndex];
 
-      const base64 = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve(reader.result.split(',')[1]);
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
+      // === ГЛАВНОЕ: FormData вместо JSON/base64 ===
+      const formData = new FormData();
+      formData.append('image', file);                 // поле 'image' — файл
+      formData.append('model', selectedModel);
+      formData.append('currency', currency);
+      formData.append('docType', docType);
 
       const res = await fetch(`${API_URL}/api/upload-receipt?token=${token}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          image: base64,
-          fileName: file.name,
-          fileType: file.type,
-          model: selectedModel,
-          currency: currency,
-          docType: docType
-        })
+        body: formData
+        // НЕ указываем Content-Type! Браузер сам поставит multipart/form-data
       });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Сервер вернул ${res.status}: ${text}`);
+      }
 
       const data = await res.json();
 
-      if (!data.success) {
-        throw new Error(data.error || 'Сохранение не удалось');
+      if (!data.success && !data.id) {
+        throw new Error(data.error || data.message || 'Сохранение не удалось');
       }
 
-      setLastSavedReceipt(data);
+      // Бэкенд может вернуть {success: true, data: {...}} или просто объект чека
+      const receiptData = data.data || data;
+
+      // Фикс Mixed Content
+      if (receiptData.image_url) {
+        receiptData.image_url = fixImageUrl(receiptData.image_url);
+      }
+
+      setLastSavedReceipt(receiptData);
       loadReceipts();
 
     } catch (e) {
@@ -209,12 +241,13 @@ function App() {
       a.href = url;
       a.download = 'receipts.xlsx';
       a.click();
+      window.URL.revokeObjectURL(url);
     } catch (e) {
       console.error('Ошибка экспорта:', e);
     }
   };
 
-  // === LOAD MODELS (ТОЛЬКО GEMINI + GROQ + OCR.SPACE) ===
+  // === LOAD MODELS ===
   const loadModels = async () => {
     setModelsLoading(true);
     try {
@@ -259,7 +292,7 @@ function App() {
   };
 
   const formatAmount = (amount, currency) => {
-    if (!amount) return '-';
+    if (amount === null || amount === undefined) return '-';
     return `${parseFloat(amount).toFixed(2)} ${currency || ''}`;
   };
 

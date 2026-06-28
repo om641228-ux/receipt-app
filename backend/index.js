@@ -3,11 +3,18 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const multer = require('multer');
 const { createClient } = require('@supabase/supabase-js');
 const ws = require('ws');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// ====== Multer (для FormData) ======
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 } // 10 МБ
+});
 
 // ====== Supabase ======
 const supabase = createClient(
@@ -17,8 +24,18 @@ const supabase = createClient(
 );
 
 // ====== CORS ======
-app.use(cors({ origin: '*', methods: ['GET','POST','PUT','DELETE','OPTIONS'], allowedHeaders: ['Content-Type','Authorization'], credentials: true }));
-app.options('*', (req, res) => { res.header('Access-Control-Allow-Origin','*'); res.header('Access-Control-Allow-Methods','GET,POST,PUT,DELETE,OPTIONS'); res.header('Access-Control-Allow-Headers','Content-Type,Authorization'); res.status(200).end(); });
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
+app.options('*', (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  res.status(200).end();
+});
 app.use(express.json({ limit: '50mb' }));
 
 // ====== Uploads ======
@@ -60,23 +77,32 @@ async function recognizeWithGemini(base64Image, mimeType, modelId) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      contents: [{ parts: [
-        { text: prompt },
-        { inline_data: { mime_type: mimeType || 'image/jpeg', data: base64Image } }
-      ]}],
+      contents: [{
+        parts: [
+          { text: prompt },
+          { inline_data: { mime_type: mimeType || 'image/jpeg', data: base64Image } }
+        ]
+      }],
       generationConfig: { temperature: 0.1, maxOutputTokens: 4096 }
     })
   });
 
-  if (!response.ok) { const err = await response.text(); throw new Error(`Gemini ${response.status}: ${err}`); }
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Gemini ${response.status}: ${err}`);
+  }
   const result = await response.json();
   const text = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
   try {
-    const clean = text.replace(/```json\s*/g,'').replace(/```\s*/g,'').trim();
+    const clean = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
     return JSON.parse(clean);
   } catch (e) {
-    return { store_name:'Unknown', store_name_ru:null, receipt_date:null, receipt_time:null, total_amount:0, subtotal:null, tax_amount:null, tax_rate:null, currency:null, items:[], raw_text:text };
+    return {
+      store_name: 'Unknown', store_name_ru: null, receipt_date: null, receipt_time: null,
+      total_amount: 0, subtotal: null, tax_amount: null, tax_rate: null,
+      currency: null, items: [], raw_text: text
+    };
   }
 }
 
@@ -93,23 +119,33 @@ async function recognizeWithGroq(base64Image, mimeType, modelId) {
     headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: model,
-      messages: [{ role: 'user', content: [
-        { type: 'text', text: 'Проанализируй этот чек. Верни результат СТРОГО в JSON: {store_name, store_name_ru, receipt_date (YYYY-MM-DD), receipt_time (HH:MM), total_amount (число), subtotal, tax_amount, tax_rate, currency, items:[{name, name_ru, quantity, price, total}], raw_text}. Если поле не найдено — null.' },
-        { type: 'image_url', image_url: { url: dataUrl } }
-      ]}],
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Проанализируй этот чек. Верни результат СТРОГО в JSON: {store_name, store_name_ru, receipt_date (YYYY-MM-DD), receipt_time (HH:MM), total_amount (число), subtotal, tax_amount, tax_rate, currency, items:[{name, name_ru, quantity, price, total}], raw_text}. Если поле не найдено — null.' },
+          { type: 'image_url', image_url: { url: dataUrl } }
+        ]
+      }],
       temperature: 0.1, max_tokens: 4096
     })
   });
 
-  if (!response.ok) { const err = await response.text(); throw new Error(`Groq ${response.status}: ${err}`); }
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Groq ${response.status}: ${err}`);
+  }
   const result = await response.json();
   const text = result.choices?.[0]?.message?.content || '';
 
   try {
-    const clean = text.replace(/```json\s*/g,'').replace(/```\s*/g,'').trim();
+    const clean = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
     return JSON.parse(clean);
   } catch (e) {
-    return { store_name:'Unknown', store_name_ru:null, receipt_date:null, receipt_time:null, total_amount:0, subtotal:null, tax_amount:null, tax_rate:null, currency:null, items:[], raw_text:text };
+    return {
+      store_name: 'Unknown', store_name_ru: null, receipt_date: null, receipt_time: null,
+      total_amount: 0, subtotal: null, tax_amount: null, tax_rate: null,
+      currency: null, items: [], raw_text: text
+    };
   }
 }
 
@@ -140,7 +176,10 @@ async function recognizeWithOCRSpace(base64Image, modelId) {
     body: formData.toString()
   });
 
-  if (!response.ok) { const err = await response.text(); throw new Error(`OCR.space ${response.status}: ${err}`); }
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`OCR.space ${response.status}: ${err}`);
+  }
   const result = await response.json();
 
   if (result.IsErroOnProcessing) throw new Error(`OCR.space error: ${result.ErrorMessage}`);
@@ -161,7 +200,10 @@ function extractTotal(text) {
     /AMOUNT\s*DUE\s*[€$£AED]*\s*([\d,]+\.?\d*)/i,
     /([\d,]+\.?\d*)\s*(AED|EUR|USD|\$|€)/i
   ];
-  for (const p of patterns) { const m = text.match(p); if (m) return parseFloat(m[1].replace(/,/g,'')); }
+  for (const p of patterns) {
+    const m = text.match(p);
+    if (m) return parseFloat(m[1].replace(/,/g, ''));
+  }
   return 0;
 }
 
@@ -175,106 +217,112 @@ function extractCurrency(text) {
 
 // ====== LIST MODELS ======
 app.get('/api/list-gemini-models', (req, res) => {
-  res.json({ models: [
-    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
-    { id: 'gemini-2.5-flash-image', name: 'Gemini 2.5 Flash Image' },
-    { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite' },
-    { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro' },
-    { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash Preview' },
-    { id: 'gemini-3-pro-image', name: 'Gemini 3 Pro Image' },
-    { id: 'gemini-3-pro-image-preview', name: 'Gemini 3 Pro Image Preview' },
-    { id: 'gemini-3.1-flash-image', name: 'Gemini 3.1 Flash Image' },
-    { id: 'gemini-3.1-flash-image-preview', name: 'Gemini 3.1 Flash Image Preview' },
-    { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite' },
-    { id: 'gemini-3.1-flash-lite-preview', name: 'Gemini 3.1 Flash Lite Preview' },
-    { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview' },
-    { id: 'gemini-3.1-pro-preview-customtools', name: 'Gemini 3.1 Pro Preview Custom Tools' },
-    { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash' },
-    { id: 'gemini-flash-latest', name: 'Gemini Flash Latest' },
-    { id: 'gemini-flash-lite-latest', name: 'Gemini Flash Lite Latest' },
-    { id: 'gemini-pro-latest', name: 'Gemini Pro Latest' },
-    { id: 'gemini-robotics-er-1.6-preview', name: 'Gemini Robotics ER 1.6 Preview' },
-    { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash' },
-    { id: 'gemini-2.0-flash-001', name: 'Gemini 2.0 Flash 001' },
-    { id: 'gemini-2.0-flash-lite', name: 'Gemini 2.0 Flash Lite' },
-    { id: 'gemini-2.0-pro-exp-02-05', name: 'Gemini 2.0 Pro Exp' },
-    { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash Exp' },
-    { id: 'gemini-2.0-flash-thinking-exp-01-21', name: 'Gemini 2.0 Flash Thinking Exp' },
-    { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash' },
-    { id: 'gemini-1.5-flash-8b', name: 'Gemini 1.5 Flash 8B' },
-    { id: 'gemini-1.5-flash-002', name: 'Gemini 1.5 Flash 002' },
-    { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro' },
-    { id: 'gemini-1.5-pro-002', name: 'Gemini 1.5 Pro 002' },
-    { id: 'gemini-1.0-pro', name: 'Gemini 1.0 Pro' },
-    { id: 'gemini-1.0-pro-002', name: 'Gemini 1.0 Pro 002' },
-    { id: 'gemini-pro-vision', name: 'Gemini Pro Vision' },
-    { id: 'gemini-exp-1206', name: 'Gemini Exp 1206' },
-    { id: 'gemini-exp-1121', name: 'Gemini Exp 1121' },
-    { id: 'gemini-2.0-flash-preview', name: 'Gemini 2.0 Flash Preview' },
-    { id: 'gemini-2.0-flash-lite-preview', name: 'Gemini 2.0 Flash Lite Preview' },
-    { id: 'gemini-2.0-pro-preview', name: 'Gemini 2.0 Pro Preview' },
-    { id: 'gemini-2.0-ultra', name: 'Gemini 2.0 Ultra' }
-  ]});
+  res.json({
+    models: [
+      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
+      { id: 'gemini-2.5-flash-image', name: 'Gemini 2.5 Flash Image' },
+      { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite' },
+      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro' },
+      { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash Preview' },
+      { id: 'gemini-3-pro-image', name: 'Gemini 3 Pro Image' },
+      { id: 'gemini-3-pro-image-preview', name: 'Gemini 3 Pro Image Preview' },
+      { id: 'gemini-3.1-flash-image', name: 'Gemini 3.1 Flash Image' },
+      { id: 'gemini-3.1-flash-image-preview', name: 'Gemini 3.1 Flash Image Preview' },
+      { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite' },
+      { id: 'gemini-3.1-flash-lite-preview', name: 'Gemini 3.1 Flash Lite Preview' },
+      { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview' },
+      { id: 'gemini-3.1-pro-preview-customtools', name: 'Gemini 3.1 Pro Preview Custom Tools' },
+      { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash' },
+      { id: 'gemini-flash-latest', name: 'Gemini Flash Latest' },
+      { id: 'gemini-flash-lite-latest', name: 'Gemini Flash Lite Latest' },
+      { id: 'gemini-pro-latest', name: 'Gemini Pro Latest' },
+      { id: 'gemini-robotics-er-1.6-preview', name: 'Gemini Robotics ER 1.6 Preview' },
+      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash' },
+      { id: 'gemini-2.0-flash-001', name: 'Gemini 2.0 Flash 001' },
+      { id: 'gemini-2.0-flash-lite', name: 'Gemini 2.0 Flash Lite' },
+      { id: 'gemini-2.0-pro-exp-02-05', name: 'Gemini 2.0 Pro Exp' },
+      { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash Exp' },
+      { id: 'gemini-2.0-flash-thinking-exp-01-21', name: 'Gemini 2.0 Flash Thinking Exp' },
+      { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash' },
+      { id: 'gemini-1.5-flash-8b', name: 'Gemini 1.5 Flash 8B' },
+      { id: 'gemini-1.5-flash-002', name: 'Gemini 1.5 Flash 002' },
+      { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro' },
+      { id: 'gemini-1.5-pro-002', name: 'Gemini 1.5 Pro 002' },
+      { id: 'gemini-1.0-pro', name: 'Gemini 1.0 Pro' },
+      { id: 'gemini-1.0-pro-002', name: 'Gemini 1.0 Pro 002' },
+      { id: 'gemini-pro-vision', name: 'Gemini Pro Vision' },
+      { id: 'gemini-exp-1206', name: 'Gemini Exp 1206' },
+      { id: 'gemini-exp-1121', name: 'Gemini Exp 1121' },
+      { id: 'gemini-2.0-flash-preview', name: 'Gemini 2.0 Flash Preview' },
+      { id: 'gemini-2.0-flash-lite-preview', name: 'Gemini 2.0 Flash Lite Preview' },
+      { id: 'gemini-2.0-pro-preview', name: 'Gemini 2.0 Pro Preview' },
+      { id: 'gemini-2.0-ultra', name: 'Gemini 2.0 Ultra' }
+    ]
+  });
 });
 
 app.get('/api/list-groq-models', (req, res) => {
-  res.json({ models: [
-    { id: 'meta-llama/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout 17B' },
-    { id: 'meta-llama/llama-4-maverick-17b-128e-instruct', name: 'Llama 4 Maverick 17B' },
-    { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B Versatile' },
-    { id: 'llama-3.2-1b-preview', name: 'Llama 3.2 1B Preview' },
-    { id: 'llama-3.2-3b-preview', name: 'Llama 3.2 3B Preview' },
-    { id: 'llama-3.2-11b-vision-preview', name: 'Llama 3.2 11B Vision' },
-    { id: 'llama-3.2-90b-vision-preview', name: 'Llama 3.2 90B Vision' },
-    { id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B Instant' },
-    { id: 'llama-3.1-70b-versatile', name: 'Llama 3.1 70B Versatile' },
-    { id: 'llama-3.1-405b-reasoning', name: 'Llama 3.1 405B Reasoning' },
-    { id: 'llama3-8b-8192', name: 'Llama 3 8B' },
-    { id: 'llama3-70b-8192', name: 'Llama 3 70B' },
-    { id: 'llama-guard-3-8b', name: 'Llama Guard 3 8B' },
-    { id: 'meta-llama/llama-prompt-guard-2-22m', name: 'Llama Prompt Guard 2 22M' },
-    { id: 'meta-llama/llama-prompt-guard-2-86m', name: 'Llama Prompt Guard 2 86M' },
-    { id: 'mixtral-8x7b-32768', name: 'Mixtral 8x7B' },
-    { id: 'mixtral-8x22b-instruct', name: 'Mixtral 8x22B Instruct' },
-    { id: 'gemma-7b-it', name: 'Gemma 7B' },
-    { id: 'gemma2-9b-it', name: 'Gemma 2 9B' },
-    { id: 'gemma2-27b-it', name: 'Gemma 2 27B' },
-    { id: 'qwen-2.5-32b', name: 'Qwen 2.5 32B' },
-    { id: 'qwen-2.5-coder-32b', name: 'Qwen 2.5 Coder 32B' },
-    { id: 'qwen-qwq-32b', name: 'Qwen QwQ 32B' },
-    { id: 'qwen/qwen3-32b', name: 'Qwen 3 32B' },
-    { id: 'qwen/qwen3.6-27b', name: 'Qwen 3.6 27B' },
-    { id: 'deepseek-r1-distill-llama-70b', name: 'DeepSeek R1 Distill Llama 70B' },
-    { id: 'deepseek-r1-distill-qwen-32b', name: 'DeepSeek R1 Distill Qwen 32B' },
-    { id: 'deepseek-r1-distill-qwen-14b', name: 'DeepSeek R1 Distill Qwen 14B' },
-    { id: 'mistral-saba-24b', name: 'Mistral Saba 24B' },
-    { id: 'mistral-nemo', name: 'Mistral Nemo' },
-    { id: 'mistral-7b-instruct', name: 'Mistral 7B Instruct' },
-    { id: 'openai/gpt-oss-120b', name: 'GPT-OSS 120B' },
-    { id: 'openai/gpt-oss-20b', name: 'GPT-OSS 20B' },
-    { id: 'openai/gpt-oss-safeguard-20b', name: 'GPT-OSS Safeguard 20B' },
-    { id: 'groq/compound', name: 'Groq Compound' },
-    { id: 'groq/compound-mini', name: 'Groq Compound Mini' },
-    { id: 'allam-2-7b', name: 'Allam 2 7B' },
-    { id: 'canoplabs/orpheus-arabic-saudi', name: 'Orpheus Arabic Saudi' },
-    { id: 'canoplabs/orpheus-v1-english', name: 'Orpheus v1 English' },
-    { id: 'whisper-large-v3', name: 'Whisper Large v3' },
-    { id: 'whisper-large-v3-turbo', name: 'Whisper Large v3 Turbo' },
-    { id: 'distil-whisper-large-v3-en', name: 'Distil Whisper Large v3 EN' }
-  ]});
+  res.json({
+    models: [
+      { id: 'meta-llama/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout 17B' },
+      { id: 'meta-llama/llama-4-maverick-17b-128e-instruct', name: 'Llama 4 Maverick 17B' },
+      { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B Versatile' },
+      { id: 'llama-3.2-1b-preview', name: 'Llama 3.2 1B Preview' },
+      { id: 'llama-3.2-3b-preview', name: 'Llama 3.2 3B Preview' },
+      { id: 'llama-3.2-11b-vision-preview', name: 'Llama 3.2 11B Vision' },
+      { id: 'llama-3.2-90b-vision-preview', name: 'Llama 3.2 90B Vision' },
+      { id: 'llama-3.1-8b-instant', name: 'Llama 3.1 8B Instant' },
+      { id: 'llama-3.1-70b-versatile', name: 'Llama 3.1 70B Versatile' },
+      { id: 'llama-3.1-405b-reasoning', name: 'Llama 3.1 405B Reasoning' },
+      { id: 'llama3-8b-8192', name: 'Llama 3 8B' },
+      { id: 'llama3-70b-8192', name: 'Llama 3 70B' },
+      { id: 'llama-guard-3-8b', name: 'Llama Guard 3 8B' },
+      { id: 'meta-llama/llama-prompt-guard-2-22m', name: 'Llama Prompt Guard 2 22M' },
+      { id: 'meta-llama/llama-prompt-guard-2-86m', name: 'Llama Prompt Guard 2 86M' },
+      { id: 'mixtral-8x7b-32768', name: 'Mixtral 8x7B' },
+      { id: 'mixtral-8x22b-instruct', name: 'Mixtral 8x22B Instruct' },
+      { id: 'gemma-7b-it', name: 'Gemma 7B' },
+      { id: 'gemma2-9b-it', name: 'Gemma 2 9B' },
+      { id: 'gemma2-27b-it', name: 'Gemma 2 27B' },
+      { id: 'qwen-2.5-32b', name: 'Qwen 2.5 32B' },
+      { id: 'qwen-2.5-coder-32b', name: 'Qwen 2.5 Coder 32B' },
+      { id: 'qwen-qwq-32b', name: 'Qwen QwQ 32B' },
+      { id: 'qwen/qwen3-32b', name: 'Qwen 3 32B' },
+      { id: 'qwen/qwen3.6-27b', name: 'Qwen 3.6 27B' },
+      { id: 'deepseek-r1-distill-llama-70b', name: 'DeepSeek R1 Distill Llama 70B' },
+      { id: 'deepseek-r1-distill-qwen-32b', name: 'DeepSeek R1 Distill Qwen 32B' },
+      { id: 'deepseek-r1-distill-qwen-14b', name: 'DeepSeek R1 Distill Qwen 14B' },
+      { id: 'mistral-saba-24b', name: 'Mistral Saba 24B' },
+      { id: 'mistral-nemo', name: 'Mistral Nemo' },
+      { id: 'mistral-7b-instruct', name: 'Mistral 7B Instruct' },
+      { id: 'openai/gpt-oss-120b', name: 'GPT-OSS 120B' },
+      { id: 'openai/gpt-oss-20b', name: 'GPT-OSS 20B' },
+      { id: 'openai/gpt-oss-safeguard-20b', name: 'GPT-OSS Safeguard 20B' },
+      { id: 'groq/compound', name: 'Groq Compound' },
+      { id: 'groq/compound-mini', name: 'Groq Compound Mini' },
+      { id: 'allam-2-7b', name: 'Allam 2 7B' },
+      { id: 'canoplabs/orpheus-arabic-saudi', name: 'Orpheus Arabic Saudi' },
+      { id: 'canoplabs/orpheus-v1-english', name: 'Orpheus v1 English' },
+      { id: 'whisper-large-v3', name: 'Whisper Large v3' },
+      { id: 'whisper-large-v3-turbo', name: 'Whisper Large v3 Turbo' },
+      { id: 'distil-whisper-large-v3-en', name: 'Distil Whisper Large v3 EN' }
+    ]
+  });
 });
 
 app.get('/api/list-ocrspace-models', (req, res) => {
-  res.json({ models: [
-    { id: 'ocrspace-default', name: 'OCR.space Default (Engine 1)' },
-    { id: 'ocrspace-engine2', name: 'OCR.space Engine 2' },
-    { id: 'ocrspace-engine3', name: 'OCR.space Engine 3' },
-    { id: 'ocrspace-engine5', name: 'OCR.space Engine 5 (Table OCR)' },
-    { id: 'ocrspace-handwritten', name: 'OCR.space Handwritten' },
-    { id: 'ocrspace-receipt', name: 'OCR.space Receipt' },
-    { id: 'ocr-engine-1', name: 'OCR Engine 1' },
-    { id: 'ocr-engine-2', name: 'OCR Engine 2' }
-  ]});
+  res.json({
+    models: [
+      { id: 'ocrspace-default', name: 'OCR.space Default (Engine 1)' },
+      { id: 'ocrspace-engine2', name: 'OCR.space Engine 2' },
+      { id: 'ocrspace-engine3', name: 'OCR.space Engine 3' },
+      { id: 'ocrspace-engine5', name: 'OCR.space Engine 5 (Table OCR)' },
+      { id: 'ocrspace-handwritten', name: 'OCR.space Handwritten' },
+      { id: 'ocrspace-receipt', name: 'OCR.space Receipt' },
+      { id: 'ocr-engine-1', name: 'OCR Engine 1' },
+      { id: 'ocr-engine-2', name: 'OCR Engine 2' }
+    ]
+  });
 });
 
 // ====== CORE ROUTES ======
@@ -284,7 +332,9 @@ app.get('/api/receipts', async (req, res) => {
     const { data, error } = await supabase.from('receipts').select('*').order('created_at', { ascending: false });
     if (error) throw error;
     res.json(data || []);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.delete('/api/receipts/:id', async (req, res) => {
@@ -292,7 +342,9 @@ app.delete('/api/receipts/:id', async (req, res) => {
     const { error } = await supabase.from('receipts').delete().eq('id', req.params.id);
     if (error) throw error;
     res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Helper: sanitize values for Supabase
@@ -301,23 +353,41 @@ function sanitizeForDB(val) {
   return val;
 }
 
-// POST /api/upload-receipt
-app.post('/api/upload-receipt', async (req, res) => {
+// POST /api/upload-receipt — теперь принимает FormData (multipart/form-data)
+app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
   try {
-    const { image, fileName, fileType, model, currency, docType } = req.body;
-    if (!image) return res.status(400).json({ success: false, error: 'Нет изображения' });
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ success: false, error: 'Нет изображения (поле FormData должно называться "image")' });
+    }
 
-    // 1. Save file
-    const buffer = Buffer.from(image, 'base64');
-    const ext = fileName ? path.extname(fileName) : '.jpg';
+    // Текстовые поля из FormData
+    const { model, currency, docType } = req.body;
+    const base64Image = file.buffer.toString('base64');
+
+    // 1. Save file locally
+    const ext = path.extname(file.originalname) || '.jpg';
     const savedName = `${Date.now()}${ext}`;
-    fs.writeFileSync(path.join(uploadsDir, savedName), buffer);
+    fs.writeFileSync(path.join(uploadsDir, savedName), file.buffer);
 
     const host = req.get('host') || `localhost:${PORT}`;
     const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-    const imageUrl = `${protocol}://${host}/uploads/${savedName}`;
+    let imageUrl = `${protocol}://${host}/uploads/${savedName}`;
 
-    // 2. Recognize
+    // 2. Also upload to Supabase Storage ( Railway файлы живут до перезапуска)
+    try {
+      const { error: upErr } = await supabase.storage
+        .from('receipts')
+        .upload(savedName, file.buffer, { contentType: file.mimetype });
+      if (!upErr) {
+        const { data: urlData } = supabase.storage.from('receipts').getPublicUrl(savedName);
+        imageUrl = urlData.publicUrl.replace('http://', 'https://');
+      }
+    } catch (e) {
+      console.error('Supabase upload error:', e);
+    }
+
+    // 3. Recognize
     let recognized = null;
     let recognitionMethod = model || 'manual';
     const selectedModel = model || 'gemini-1.5-flash';
@@ -325,15 +395,15 @@ app.post('/api/upload-receipt', async (req, res) => {
     try {
       if (selectedModel.startsWith('gemini')) {
         console.log('🔍 Gemini recognition...');
-        recognized = await recognizeWithGemini(image, fileType || 'image/jpeg', selectedModel);
+        recognized = await recognizeWithGemini(base64Image, file.mimetype || 'image/jpeg', selectedModel);
         recognitionMethod = selectedModel;
       } else if (selectedModel.includes('vision')) {
         console.log('🔍 Groq Vision recognition...');
-        recognized = await recognizeWithGroq(image, fileType || 'image/jpeg', selectedModel);
+        recognized = await recognizeWithGroq(base64Image, file.mimetype || 'image/jpeg', selectedModel);
         recognitionMethod = selectedModel;
       } else if (selectedModel.startsWith('ocr') || selectedModel.startsWith('ocrspace')) {
         console.log('🔍 OCR.space recognition...');
-        recognized = await recognizeWithOCRSpace(image, selectedModel);
+        recognized = await recognizeWithOCRSpace(base64Image, selectedModel);
         recognitionMethod = selectedModel;
       } else {
         console.log('⚠️ Model without vision support, saving without recognition');
@@ -342,7 +412,7 @@ app.post('/api/upload-receipt', async (req, res) => {
       console.error('❌ Recognition error:', recErr.message);
     }
 
-    // 3. Sanitize and save to DB
+    // 4. Sanitize and save to DB
     const insertData = {
       image_url: imageUrl,
       currency: sanitizeForDB(currency) || sanitizeForDB(recognized?.currency) || 'AED',
@@ -377,8 +447,15 @@ app.post('/api/export-excel', async (req, res) => {
 
 // ====== OPTIONAL MODULES ======
 function tryRequire(modulePath, routePath) {
-  try { const mod = require(modulePath); if (routePath) app.use(routePath, mod); console.log(`✅ Loaded: ${modulePath}`); return mod; }
-  catch (e) { console.warn(`⚠️  Module not found: ${modulePath}`); return null; }
+  try {
+    const mod = require(modulePath);
+    if (routePath) app.use(routePath, mod);
+    console.log(`✅ Loaded: ${modulePath}`);
+    return mod;
+  } catch (e) {
+    console.warn(`⚠️  Module not found: ${modulePath}`);
+    return null;
+  }
 }
 tryRequire('./identify', '/api/identify');
 tryRequire('./identify-groq', '/api/identify-groq');
@@ -396,7 +473,10 @@ app.get('/api/health', (req, res) => res.json({
   supabase: process.env.SUPABASE_URL ? '✅' : '❌'
 }));
 
-app.use((err, req, res, next) => { console.error('❌ Error:', err.message); res.status(500).json({ success: false, error: err.message }); });
+app.use((err, req, res, next) => {
+  console.error('❌ Error:', err.message);
+  res.status(500).json({ success: false, error: err.message });
+});
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ API на порту ${PORT}`);
