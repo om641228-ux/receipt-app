@@ -69,6 +69,67 @@ async function compressImage(buffer, maxWidth = 1500, quality = 85) {
 
 // ====== RECOGNITION FUNCTIONS ======
 
+// ====== POST-PROCESSING: clean items from AI ======
+function cleanItems(items, rawText) {
+  if (!Array.isArray(items)) return [];
+
+  const badPatterns = [
+    /^\d+\s*EACH$/i,
+    /^\d+\s*PCS$/i,
+    /^Rounding[:.]?$/i,
+    /^Sub\s*Total[:.]?$/i,
+    /^Tax[:.]?$/i,
+    /^Total[:.]?$/i,
+    /^VAT\s*\d/,
+    /^DMTax/,
+    /^\d+\s*\d+$/,
+    /^E\d+$/,
+    /^CN\d+$/,
+    /^\d{5,}$/,
+  ];
+
+  const cleaned = items.filter(item => {
+    const name = (item.name || '').trim();
+    // Remove items with bad names
+    for (const p of badPatterns) {
+      if (p.test(name)) return false;
+    }
+    // Must have a real name (at least 3 chars, not just numbers)
+    if (name.length < 3) return false;
+    if (/^\d+\s*EACH$/i.test(name)) return false;
+    return true;
+  });
+
+  // Try to fix names from raw_text if they look like "2 EACH"
+  const lines = (rawText || '').split('\n').map(l => l.trim()).filter(l => l);
+  const fixed = cleaned.map(item => {
+    let name = (item.name || '').trim();
+    // If name is bad, try to find real name in nearby lines
+    if (/^\d+\s*EACH$/i.test(name) || name.length < 4) {
+      // Find line with price matching this item
+      const priceStr = String(item.price || item.total || '');
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].includes(priceStr) && i > 0) {
+          // Check previous lines for product name
+          for (let j = Math.max(0, i-3); j < i; j++) {
+            const candidate = lines[j];
+            if (candidate.length > 5 && 
+                !/^\d+/.test(candidate) &&
+                !/EACH|PCS|Total|Tax|Sub/i.test(candidate) &&
+                !/^E\d|^CN\d/.test(candidate)) {
+              name = candidate;
+              break;
+            }
+          }
+        }
+      }
+    }
+    return { ...item, name };
+  });
+
+  return fixed;
+}
+
 // 1. GEMINI
 async function recognizeWithGemini(base64Image, mimeType, modelId) {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -665,6 +726,12 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     // Если была ошибка но распознавание частично прошло — показываем предупреждение
     if (recognitionError) {
       console.warn('⚠️ Recognition had errors but returned data:', recognitionError);
+    }
+
+    // 5.5. Clean items from AI errors
+    if (recognized && recognized.items) {
+      recognized.items = cleanItems(recognized.items, recognized.raw_text || '');
+      console.log('🧹 Cleaned items:', recognized.items.length, 'from', (recognized.items?.length || 0));
     }
 
     // 6. Save to DB
