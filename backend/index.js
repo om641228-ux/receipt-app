@@ -83,22 +83,33 @@ async function recognizeWithGemini(base64Image, mimeType, modelId) {
     generationConfig: { temperature: 0.1, maxOutputTokens: 4096 }
   });
 
-  const prompt = `Ты — эксперт по распознаванию чеков. Проанализируй изображение и верни результат СТРОГО в формате JSON (без markdown, только чистый JSON).
+  const prompt = `Ты — эксперт по распознаванию чеков. Проанализируй изображение чека и верни результат СТРОГО в формате JSON (без markdown, только чистый JSON).
 
-Извлеки:
-- store_name: название магазина
-- store_name_ru: название на русском
-- receipt_date: дата YYYY-MM-DD
-- receipt_time: время HH:MM
-- total_amount: общая сумма (число)
-- subtotal: сумма без налога
-- tax_amount: налог
-- tax_rate: процент налога
-- currency: валюта (AED, EUR, USD, RUB)
-- items: массив [{name, name_ru, quantity, price, total}]
-- raw_text: полный текст чека
+ВАЖНЫЕ ПРАВИЛА ДЛЯ ТОВАРОВ:
+1. Название товара — это РЕАЛЬНОЕ название продукта (например "WARRE'S WARRIOR 75CL", "GRAHAM'S SIX GRAPE RESERVE 75CL", "Plastic Bag")
+2. НЕ используй "2 EACH", "1 EACH", "1 PCS" как название товара — это количество!
+3. Если название товара написано на отдельной строке от кода/количества — возьми название с той строки
+4. Код товара (например E0260, 12991, CN010) — это НЕ название, пропускай его
+5. "Rounding", "Sub Total", "Tax", "Total" — это НЕ товары, не включай их
 
-Если поле не найдено — используй null (не пустую строку).`;
+Структура JSON:
+{
+  "store_name": "название магазина",
+  "store_name_ru": "название на русском",
+  "receipt_date": "YYYY-MM-DD",
+  "receipt_time": "HH:MM",
+  "total_amount": 359.50,
+  "subtotal": 263.48,
+  "tax_amount": 96.02,
+  "tax_rate": "5%",
+  "currency": "AED",
+  "items": [
+    {"name": "WARRE'S WARRIOR 75CL", "name_ru": "Виски WARRE'S WARRIOR 0.75л", "quantity": 2, "price": 79.12, "total": 158.24}
+  ],
+  "raw_text": "полный текст чека"
+}
+
+Если поле не найдено — используй null.`;
 
   const result = await model.generateContent([
     prompt,
@@ -156,7 +167,7 @@ async function recognizeWithGroq(base64Image, mimeType, modelId) {
       messages: [{
         role: 'user',
         content: [
-          { type: 'text', text: 'Проанализируй этот чек. Верни результат СТРОГО в JSON: {store_name, store_name_ru, receipt_date (YYYY-MM-DD), receipt_time (HH:MM), total_amount (число), subtotal, tax_amount, tax_rate, currency, items:[{name, name_ru, quantity, price, total}], raw_text}. Если поле не найдено — null.' },
+          { type: 'text', text: 'Проанализируй этот чек. ВАЖНО: название товара — это РЕАЛЬНОЕ название продукта, НЕ "2 EACH" или код товара. Если название на отдельной строке от количества — бери название с отдельной строки. Не включай "Rounding", "Sub Total", "Tax" как товары. Верни СТРОГО в JSON: {store_name, store_name_ru, receipt_date, receipt_time, total_amount, subtotal, tax_amount, tax_rate, currency, items:[{name, name_ru, quantity, price, total}], raw_text}' },
           { type: 'image_url', image_url: { url: dataUrl } }
         ]
       }],
