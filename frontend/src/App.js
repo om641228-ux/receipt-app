@@ -713,8 +713,15 @@ function App() {
                   <p className="date">{formatDate(receipt.receipt_date)} {receipt.receipt_time}</p>
                   <p className="amount">{formatAmount(receipt.total_amount, receipt.currency)}</p>
                   <p className="items-count">🛒 {receipt.items?.length || 0} товаров</p>
-                  {receipt.image_url && (
-                    <img src={receipt.image_url} alt="Чек" className="receipt-thumb" />
+                  {receipt.image_url ? (
+                    <img 
+                      src={receipt.image_url} 
+                      alt="Чек" 
+                      className="receipt-thumb"
+                      onError={(e) => { e.target.style.display = 'none'; }}
+                    />
+                  ) : (
+                    <div className="no-image-thumb">📄 Чек</div>
                   )}
                   <div className="receipt-actions">
                     <button onClick={() => setViewModal(receipt)}>👁️ Просмотр</button>
