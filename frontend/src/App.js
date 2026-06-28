@@ -9,14 +9,13 @@ const fixImageUrl = (url) => {
   return url.replace(/^http:\/\//, 'https://');
 };
 
-// Fallback-модели (все со скриншотов)
+// Fallback-модели (ВСЕ доступные из API)
 const FALLBACK_MODELS = [
-  // OCR.space
-  { name: 'ocrspace-engine2', displayName: 'OCR.space Engine 2', provider: 'OCR.space' },
-  { name: 'ocrspace-engine5', displayName: 'OCR.space Engine 5', provider: 'OCR.space' },
-  { name: 'ocr-engine-1', displayName: 'OCR Engine 1', provider: 'OCR.space' },
-  { name: 'ocr-engine-2', displayName: 'OCR Engine 2', provider: 'OCR.space' },
-  // Gemini (все 20 доступных)
+  // OCR.space (3 движка)
+  { name: 'ocrspace-engine1', displayName: 'OCR.space Engine 1 (Basic)', provider: 'OCR.space' },
+  { name: 'ocrspace-engine2', displayName: 'OCR.space Engine 2 (Advanced)', provider: 'OCR.space' },
+  { name: 'ocrspace-engine3', displayName: 'OCR.space Engine 3 (Handwriting)', provider: 'OCR.space' },
+  // Gemini (все generateContent модели)
   { name: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash', provider: 'Gemini' },
   { name: 'gemini-2.5-flash-image', displayName: 'Gemini 2.5 Flash Image', provider: 'Gemini' },
   { name: 'gemini-2.5-flash-lite', displayName: 'Gemini 2.5 Flash Lite', provider: 'Gemini' },
@@ -37,9 +36,28 @@ const FALLBACK_MODELS = [
   { name: 'gemini-robotics-er-1.6-preview', displayName: 'Gemini Robotics ER 1.6 Preview', provider: 'Gemini' },
   { name: 'gemini-1.5-flash', displayName: 'Gemini 1.5 Flash', provider: 'Gemini' },
   { name: 'gemini-1.5-pro', displayName: 'Gemini 1.5 Pro', provider: 'Gemini' },
-  // Groq (только vision-модели — только они поддерживают изображения)
-  { name: 'groq-llama-3.2-90b', displayName: 'Groq Llama 3.2 90B Vision', provider: 'Groq' },
-  { name: 'groq-llama-3.2-11b', displayName: 'Groq Llama 3.2 11B Vision', provider: 'Groq' },
+  { name: 'gemini-2.0-flash', displayName: 'Gemini 2.0 Flash', provider: 'Gemini' },
+  { name: 'gemini-2.0-flash-001', displayName: 'Gemini 2.0 Flash 001', provider: 'Gemini' },
+  { name: 'gemini-2.0-flash-lite', displayName: 'Gemini 2.0 Flash Lite', provider: 'Gemini' },
+  { name: 'gemini-2.0-flash-lite-001', displayName: 'Gemini 2.0 Flash Lite 001', provider: 'Gemini' },
+  { name: 'gemma-4-26b-a4b-it', displayName: 'Gemma 4 26B A4B IT', provider: 'Gemini' },
+  { name: 'gemma-4-31b-it', displayName: 'Gemma 4 31B IT', provider: 'Gemini' },
+  // Groq (все модели из API)
+  { name: 'groq-llama-3.3-70b', displayName: 'Groq Llama 3.3 70B', provider: 'Groq' },
+  { name: 'groq-llama-4-scout', displayName: 'Groq Llama 4 Scout', provider: 'Groq' },
+  { name: 'groq-compound', displayName: 'Groq Compound', provider: 'Groq' },
+  { name: 'groq-compound-mini', displayName: 'Groq Compound Mini', provider: 'Groq' },
+  { name: 'groq-allam-2-7b', displayName: 'Groq Allam 2 7B', provider: 'Groq' },
+  { name: 'groq-llama-3.1-8b', displayName: 'Groq Llama 3.1 8B', provider: 'Groq' },
+  { name: 'groq-llama-prompt-guard-2-22m', displayName: 'Groq Prompt Guard 2 22M', provider: 'Groq' },
+  { name: 'groq-llama-prompt-guard-2-86m', displayName: 'Groq Prompt Guard 2 86M', provider: 'Groq' },
+  { name: 'groq-gpt-oss-120b', displayName: 'Groq GPT-OSS 120B', provider: 'Groq' },
+  { name: 'groq-gpt-oss-20b', displayName: 'Groq GPT-OSS 20B', provider: 'Groq' },
+  { name: 'groq-gpt-oss-safeguard-20b', displayName: 'Groq GPT-OSS Safeguard 20B', provider: 'Groq' },
+  { name: 'groq-qwen3-32b', displayName: 'Groq Qwen3 32B', provider: 'Groq' },
+  { name: 'groq-qwen3.6-27b', displayName: 'Groq Qwen3.6 27B', provider: 'Groq' },
+  { name: 'groq-mixtral', displayName: 'Groq Mixtral', provider: 'Groq' },
+  { name: 'groq-gemma', displayName: 'Groq Gemma', provider: 'Groq' },
 ];
 
 function App() {
