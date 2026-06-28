@@ -214,23 +214,14 @@ function App() {
     }
   };
 
-  // === LOAD ALL MODELS (МАКСИМАЛЬНЫЙ ВЫБОР) ===
+  // === LOAD MODELS (ТОЛЬКО GEMINI + GROQ + OCR.SPACE) ===
   const loadModels = async () => {
     setModelsLoading(true);
     try {
       const endpoints = [
         { url: `${API_URL}/api/list-gemini-models`, provider: 'Gemini' },
         { url: `${API_URL}/api/list-groq-models`, provider: 'Groq' },
-        { url: `${API_URL}/api/list-ocrspace-models`, provider: 'OCR.space' },
-        { url: `${API_URL}/api/list-anthropic-models`, provider: 'Anthropic' },
-        { url: `${API_URL}/api/list-openai-models`, provider: 'OpenAI' },
-        { url: `${API_URL}/api/list-deepseek-models`, provider: 'DeepSeek' },
-        { url: `${API_URL}/api/list-mistral-models`, provider: 'Mistral' },
-        { url: `${API_URL}/api/list-cohere-models`, provider: 'Cohere' },
-        { url: `${API_URL}/api/list-ai21-models`, provider: 'AI21' },
-        { url: `${API_URL}/api/list-together-models`, provider: 'Together' },
-        { url: `${API_URL}/api/list-perplexity-models`, provider: 'Perplexity' },
-        { url: `${API_URL}/api/list-xai-models`, provider: 'xAI' }
+        { url: `${API_URL}/api/list-ocrspace-models`, provider: 'OCR.space' }
       ];
 
       let allModels = [];
@@ -276,16 +267,7 @@ function App() {
     const colors = {
       'Gemini': '#4285f4',
       'Groq': '#f55036',
-      'OCR.space': '#00a86b',
-      'Anthropic': '#d4a574',
-      'OpenAI': '#10a37f',
-      'DeepSeek': '#4d6bfa',
-      'Mistral': '#ff7000',
-      'Cohere': '#d1a3ff',
-      'AI21': '#ff6b6b',
-      'Together': '#6366f1',
-      'Perplexity': '#22c55e',
-      'xAI': '#1f2937'
+      'OCR.space': '#00a86b'
     };
     return colors[provider] || '#888';
   };
