@@ -1,646 +1,660 @@
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const path = require('path');
-const fs = require('fs');
-const multer = require('multer');
-const sharp = require('sharp');
-const FormData = require('form-data');
-const { createClient } = require('@supabase/supabase-js');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-const ws = require('ws');
+import React, { useState, useEffect, useCallback } from 'react';
+import './App.css';
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+const API_URL = 'https://backend-production-adc7.up.railway.app';
 
-// ====== Multer ======
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }
-});
+// Хелпер: убираем http:// для изображений (Mixed Content)
+const fixImageUrl = (url) => {
+  if (!url) return null;
+  return url.replace(/^http:\/\//, 'https://');
+};
 
-// ====== Supabase ======
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY,
-  { realtime: { transport: ws } }
-);
-
-// ====== CORS ======
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
-}));
-app.options('*', (req, res) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type,Authorization');
-  res.status(200).end();
-});
-app.use(express.json({ limit: '50mb' }));
-
-// ====== Uploads ======
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-app.use('/uploads', express.static(uploadsDir));
-
-// ====== Auth ======
-const authOwners = require('./auth-owners');
-app.use('/api', authOwners);
-
-// ====== IMAGE COMPRESSION ======
-async function compressImage(buffer, maxWidth = 1500, quality = 85) {
-  try {
-    const compressed = await sharp(buffer)
-      .rotate()
-      .resize({ width: maxWidth, height: 4000, fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality, progressive: true })
-      .toBuffer();
-    console.log(`📉 Compressed: ${buffer.length} → ${compressed.length} bytes (${((1 - compressed.length/buffer.length)*100).toFixed(0)}%)`);
-    return compressed;
-  } catch (e) {
-    console.error('⚠️ Compression failed:', e.message);
-    return buffer;
-  }
-}
-
-// ====== RECOGNITION FUNCTIONS ======
-
-// 1. GEMINI через SDK
-async function recognizeWithGemini(base64Image, mimeType, modelId) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error('GEMINI_API_KEY не настроен');
-
-  const modelName = modelId && modelId.startsWith('gemini') ? modelId : 'gemini-2.0-flash';
-  console.log('🤖 Gemini model:', modelName);
-
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: modelName,
-    generationConfig: { temperature: 0.1, maxOutputTokens: 4096 }
-  });
-
-  const prompt = `Ты — эксперт по распознаванию чеков. Проанализируй изображение и верни результат СТРОГО в формате JSON (без markdown, только чистый JSON).
-
-Извлеки:
-- store_name: название магазина
-- store_name_ru: название на русском
-- receipt_date: дата YYYY-MM-DD
-- receipt_time: время HH:MM
-- total_amount: общая сумма (число)
-- subtotal: сумма без налога
-- tax_amount: налог
-- tax_rate: процент налога
-- currency: валюта (AED, EUR, USD, RUB)
-- items: массив [{name, name_ru, quantity, price, total}]
-- raw_text: полный текст чека
-
-Если поле не найдено — используй null (не пустую строку).`;
-
-  const result = await model.generateContent([
-    prompt,
-    { inlineData: { data: base64Image, mimeType: mimeType || 'image/jpeg' } }
-  ]);
-
-  const text = result.response.text();
-  console.log('📝 Gemini raw (first 500 chars):', text.substring(0, 500));
-
-  try {
-    const clean = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-    const parsed = JSON.parse(clean);
-    console.log('✅ Gemini parsed:', {
-      store: parsed.store_name,
-      total: parsed.total_amount,
-      items: parsed.items?.length
-    });
-    return parsed;
-  } catch (e) {
-    console.error('❌ Gemini JSON parse error:', e.message);
-    return {
-      store_name: 'Unknown', store_name_ru: null, receipt_date: null, receipt_time: null,
-      total_amount: 0, subtotal: null, tax_amount: null, tax_rate: null,
-      currency: null, items: [], raw_text: text
+// === СЖАТИЕ ИЗОБРАЖЕНИЯ ПЕРЕД ОТПРАВКОЙ ===
+const compressImage = (file, maxWidth = 1500, quality = 0.75) => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+        
+        // Уменьшаем если ширина больше maxWidth
+        if (width > maxWidth) {
+          height = Math.round(height * maxWidth / width);
+          width = maxWidth;
+        }
+        
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // Конвертируем в JPEG с заданным качеством
+        canvas.toBlob((blob) => {
+          if (!blob) {
+            reject(new Error('Canvas toBlob failed'));
+            return;
+          }
+          // Создаём новый File с тем же именем
+          const compressedFile = new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), {
+            type: 'image/jpeg',
+            lastModified: Date.now()
+          });
+          console.log(`📉 Compressed: ${(file.size / 1024).toFixed(0)} KB → ${(blob.size / 1024).toFixed(0)} KB`);
+          resolve(compressedFile);
+        }, 'image/jpeg', quality);
+      };
+      img.onerror = () => reject(new Error('Image load failed'));
+      img.src = e.target.result;
     };
-  }
-}
-
-// 2. GROQ (Vision)
-async function recognizeWithGroq(base64Image, mimeType, modelId) {
-  const apiKey = process.env.GROQ_API_KEY;
-  if (!apiKey) throw new Error('GROQ_API_KEY не настроен');
-
-  const visionModels = ['llama-3.2-11b-vision-preview', 'llama-3.2-90b-vision-preview'];
-  const model = visionModels.includes(modelId) ? modelId : 'llama-3.2-11b-vision-preview';
-  const dataUrl = `data:${mimeType || 'image/jpeg'};base64,${base64Image}`;
-
-  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: model,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'text', text: 'Проанализируй этот чек. Верни результат СТРОГО в JSON: {store_name, store_name_ru, receipt_date (YYYY-MM-DD), receipt_time (HH:MM), total_amount (число), subtotal, tax_amount, tax_rate, currency, items:[{name, name_ru, quantity, price, total}], raw_text}. Если поле не найдено — null.' },
-          { type: 'image_url', image_url: { url: dataUrl } }
-        ]
-      }],
-      temperature: 0.1, max_tokens: 4096
-    })
+    reader.onerror = () => reject(new Error('FileReader failed'));
+    reader.readAsDataURL(file);
   });
+};
 
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Groq ${response.status}: ${err}`);
-  }
-  const result = await response.json();
-  const text = result.choices?.[0]?.message?.content || '';
+function App() {
+  const [token, setToken] = useState(localStorage.getItem('token') || null);
+  const [user, setUser] = useState(null);
+  const [receipts, setReceipts] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState('upload');
+  const [password, setPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
 
-  try {
-    const clean = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-    return JSON.parse(clean);
-  } catch (e) {
-    return {
-      store_name: 'Unknown', store_name_ru: null, receipt_date: null, receipt_time: null,
-      total_amount: 0, subtotal: null, tax_amount: null, tax_rate: null,
-      currency: null, items: [], raw_text: text
+  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [currentFileIndex, setCurrentFileIndex] = useState(0);
+  const [previewUrls, setPreviewUrls] = useState([]);
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const [recognizing, setRecognizing] = useState(false);
+  const [lastSavedReceipt, setLastSavedReceipt] = useState(null);
+  const [selectedModel, setSelectedModel] = useState('gemini-2.0-flash');
+  const [currency, setCurrency] = useState('AED');
+  const [docType, setDocType] = useState('receipt');
+  const [showModelSelector, setShowModelSelector] = useState(false);
+
+  const [models, setModels] = useState([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+
+  const [filterType, setFilterType] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const [viewModal, setViewModal] = useState(null);
+
+  // === ОЧИСТКА PREVIEW URL ===
+  useEffect(() => {
+    return () => {
+      previewUrls.forEach(url => URL.revokeObjectURL(url));
     };
-  }
-}
+  }, [previewUrls]);
 
-// 3. OCR.SPACE — полноценная версия с парсингом
-async function recognizeWithOCRSpace(buffer, modelId) {
-  const apiKey = process.env.OCRSPACE_API_KEY;
-  if (!apiKey) throw new Error('OCRSPACE_API_KEY не настроен');
-
-  const engineMap = {
-    'ocrspace-default': '1', 'ocrspace-engine2': '2', 'ocrspace-engine3': '3',
-    'ocrspace-engine5': '5', 'ocrspace-handwritten': '2', 'ocrspace-receipt': '5',
-    'ocr-engine-1': '1', 'ocr-engine-2': '2'
-  };
-  const engine = engineMap[modelId] || '2';
-
-  // Сжимаем если нужно (OCR.space лимит ~1.5MB base64)
-  let imageBuffer = buffer;
-  let base64Data = buffer.toString('base64');
-  
-  if (base64Data.length > 1000000) {
-    console.log('📉 Extra compression for OCR.space...');
-    imageBuffer = await compressImage(buffer, 1200, 75);
-    base64Data = imageBuffer.toString('base64');
-  }
-  console.log('📐 OCR.space base64 length:', base64Data.length);
-
-  const formData = new FormData();
-  formData.append('apikey', apiKey);
-  formData.append('base64Image', `data:image/jpeg;base64,${base64Data}`);
-  formData.append('language', 'eng');
-  formData.append('isOverlayRequired', 'false');
-  formData.append('detectOrientation', 'true');
-  formData.append('OCREngine', engine);
-  formData.append('scale', 'true');
-
-  const response = await fetch('https://api.ocr.space/parse/image', {
-    method: 'POST',
-    headers: formData.getHeaders(),
-    body: formData
-  });
-
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`OCR.space ${response.status}: ${err}`);
-  }
-  
-  const result = await response.json();
-  
-  if (result.IsErroredOnProcessing) {
-    throw new Error(`OCR.space error: ${result.ErrorMessage?.[0] || JSON.stringify(result)}`);
-  }
-  
-  const parsedText = result.ParsedResults?.[0]?.ParsedText || '';
-  console.log('📝 OCR.space text (first 500 chars):', parsedText.substring(0, 500));
-
-  // Полноценный парсинг
-  const data = parseReceiptText(parsedText);
-  
-  console.log('✅ OCR.space parsed:', {
-    store: data.store_name,
-    total: data.total,
-    items: data.items.length
-  });
-  
-  return {
-    store_name: data.store_name || 'Unknown',
-    store_name_ru: data.store_name_ru || null,
-    receipt_date: data.date,
-    receipt_time: data.time,
-    total_amount: data.total || 0,
-    subtotal: data.subtotal || null,
-    tax_amount: data.tax || null,
-    tax_rate: data.tax_rate || null,
-    currency: data.currency || 'AED',
-    items: data.items || [],
-    raw_text: parsedText
-  };
-}
-
-// === ПАРСИНГ OCR.SPACE (полноценный, из identify-ocrspace.js) ===
-function parseReceiptText(fullText) {
-  const data = {
-    store_name: '',
-    store_name_ru: '',
-    date: null,
-    time: null,
-    total: 0,
-    subtotal: 0,
-    tax: 0,
-    tax_rate: null,
-    currency: detectCurrency(fullText),
-    country: null,
-    items: [],
-    payment_method: null,
-    payment_amount: 0
-  };
-
-  const lines = fullText.split('\n').map(l => l.trim()).filter(l => l);
-
-  // Магазин
-  if (lines.length > 0) {
-    data.store_name = lines[0];
-    data.store_name_ru = translateToRussian(lines[0]);
-  }
-
-  // Дата
-  const dateMatch = fullText.match(/(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{2,4})/);
-  if (dateMatch) {
-    const [, d, m, y] = dateMatch;
-    const year = y.length === 2 ? '20' + y : y;
-    data.date = `${year}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
-  }
-  
-  const timeMatch = fullText.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
-  if (timeMatch) data.time = `${timeMatch[1].padStart(2,'0')}:${timeMatch[2]}`;
-
-  // Итоговая сумма
-  const totalPatterns = [
-    /(?:GRAND\s*)?TOTAL[:\s]*[A-Z]{0,3}\s*([\d,.]+)/i,
-    /ИТОГО[:\s]*([\d,.]+)/i,
-    /ВСЕГО[:\s]*([\d,.]+)/i,
-    /TOTAL\s*DUE[:\s]*([\d,.]+)/i,
-    /TOTAL\s*DUE\s*:?\s*([\d,.]+)/i,
-    /AMOUNT\s*DUE[:\s]*([\d,.]+)/i
-  ];
-  
-  for (const pattern of totalPatterns) {
-    const match = fullText.match(pattern);
-    if (match) {
-      data.total = parseFloat(match[1].replace(/,/g, ''));
-      break;
-    }
-  }
-
-  // Налог VAT
-  const vatMatch = fullText.match(/(?:VAT|НДС|TAX)[^\d]*(\d+)?%?[:\s]*[A-Z]{0,3}\s*([\d,.]+)/i);
-  if (vatMatch) {
-    if (vatMatch[1]) data.tax_rate = vatMatch[1] + '%';
-    data.tax = parseFloat(vatMatch[2].replace(/,/g, ''));
-  }
-
-  // Subtotal
-  const subMatch = fullText.match(/(?:SUBTOTAL|SUB\s*TOTAL|Total before VAT)[:\s]*[A-Z]{0,3}\s*([\d,.]+)/i);
-  if (subMatch) {
-    data.subtotal = parseFloat(subMatch[1].replace(/,/g, ''));
-  }
-
-  // Товары - паттерн 1: "название x кол-во цена сумма"
-  const pattern1 = /^(.+?)\s+(\d+)\s*[xX×]\s*([\d,.]+)\s+([\d,.]+)/gm;
-  let match;
-  while ((match = pattern1.exec(fullText)) !== null) {
-    const [, name, qty, price, total] = match;
-    if (isProductLine(name)) {
-      data.items.push({
-        name: name.trim(),
-        name_ru: translateToRussian(name.trim()),
-        quantity: parseInt(qty),
-        price: parseFloat(price.replace(/,/g, '')),
-        total: parseFloat(total.replace(/,/g, ''))
-      });
-    }
-  }
-
-  // Паттерн 2: "название  кол-во  цена  сумма"
-  if (data.items.length === 0) {
-    const pattern2 = /^(.+?)\s{2,}(\d+)\s+([\d,.]+)\s+([\d,.]+)\s*$/gm;
-    while ((match = pattern2.exec(fullText)) !== null) {
-      const [, name, qty, price, total] = match;
-      if (isProductLine(name)) {
-        data.items.push({
-          name: name.trim(),
-          name_ru: translateToRussian(name.trim()),
-          quantity: parseInt(qty),
-          price: parseFloat(price.replace(/,/g, '')),
-          total: parseFloat(total.replace(/,/g, ''))
-        });
-      }
-    }
-  }
-
-  // Паттерн 3: "название цена"
-  if (data.items.length === 0) {
-    const pattern3 = /^(.+?)\s+([\d]{1,4}[.,]\d{2})\s*$/gm;
-    while ((match = pattern3.exec(fullText)) !== null) {
-      const [, name, price] = match;
-      if (isProductLine(name)) {
-        const p = parseFloat(price.replace(/,/g, ''));
-        data.items.push({
-          name: name.trim(),
-          name_ru: translateToRussian(name.trim()),
-          quantity: 1,
-          price: p,
-          total: p
-        });
-      }
-    }
-  }
-
-  // Страна
-  if (/DUBAI|UAE|UNITED ARAB/i.test(fullText)) data.country = 'UAE';
-  else if (/RUSSIA|РОССИЯ|МОСКВА/i.test(fullText)) data.country = 'RU';
-  else if (/GERMANY|FRANCE|ITALY/i.test(fullText)) data.country = 'EU';
-
-  return data;
-}
-
-function detectCurrency(fullText) {
-  if (fullText.includes('AED') || fullText.includes('د.إ') || /DIRHAM|DIRHAMS/i.test(fullText) || /DUBAI|UAE/i.test(fullText)) return 'AED';
-  if (fullText.includes('€') || /EURO|EUR\b/i.test(fullText)) return 'EUR';
-  if (fullText.includes('$') || /USD\b|DOLLAR/i.test(fullText)) return 'USD';
-  if (fullText.includes('₽') || /RUB|RUBLE|РУБ/i.test(fullText)) return 'RUB';
-  return 'AED';
-}
-
-function isProductLine(name) {
-  if (!name || name.length < 2 || name.length > 100) return false;
-  const excluded = ['total', 'subtotal', 'итого', 'всего', 'vat', 'ндс', 'tax', 'налог', 'cash', 'card', 'visa', 'mastercard', 'payment', 'change', 'сдача', 'receipt', 'чек', 'date', 'дата', 'time', 'время', 'thank', 'спасибо', 'address', 'адрес', 'tel', 'phone', 'тел', 'www', 'http', 'email', 'order', 'delivery', 'prepayment', 'amounts in', 'all amounts', 'manager', 'driver', 'order accepted', 'delivery time', 'order delivered'];
-  const lower = name.toLowerCase();
-  return !excluded.some(e => lower.includes(e));
-}
-
-function translateToRussian(text) {
-  if (!text) return '';
-  const translations = {
-    'Pickled Cabbage': 'Маринованная капуста',
-    'Pickled Herring with Potato': 'Маринованная сельдь с картофелем',
-    'Mini Chebureki': 'Мини чебуреки',
-    'Borscht': 'Борщ',
-    'Beetroot Soup': 'Свекольный суп',
-    'Okroshka': 'Окрошка',
-    'Summer Soup': 'Летний суп',
-    'Beef Cutlets': 'Говяжьи котлеты',
-    'Fish Cutlets': 'Рыбные котлеты',
-    'Horseradish Jar': 'Баночка хрена',
-    'Plastic Bag': 'Пластиковый пакет',
-    'Coca-Cola': 'Кока-Кола'
-  };
-  return translations[text] || text;
-}
-
-// ====== LIST MODELS ======
-app.get('/api/list-gemini-models', (req, res) => {
-  res.json({
-    models: [
-      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
-      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash' },
-      { id: 'gemini-1.5-flash-002', name: 'Gemini 1.5 Flash 002' },
-      { id: 'gemini-1.5-pro-002', name: 'Gemini 1.5 Pro 002' }
-    ]
-  });
-});
-
-app.get('/api/list-groq-models', (req, res) => {
-  res.json({
-    models: [
-      { id: 'llama-3.2-11b-vision-preview', name: 'Llama 3.2 11B Vision' },
-      { id: 'llama-3.2-90b-vision-preview', name: 'Llama 3.2 90B Vision' },
-      { id: 'meta-llama/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout' }
-    ]
-  });
-});
-
-app.get('/api/list-ocrspace-models', (req, res) => {
-  res.json({
-    models: [
-      { id: 'ocrspace-engine2', name: 'OCR.space Engine 2' },
-      { id: 'ocrspace-engine5', name: 'OCR.space Engine 5' }
-    ]
-  });
-});
-
-// ====== CORE ROUTES ======
-
-app.get('/api/receipts', async (req, res) => {
-  try {
-    const { data, error } = await supabase.from('receipts').select('*').order('created_at', { ascending: false });
-    if (error) throw error;
-    res.json(data || []);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.delete('/api/receipts/:id', async (req, res) => {
-  try {
-    const { error } = await supabase.from('receipts').delete().eq('id', req.params.id);
-    if (error) throw error;
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-function sanitizeForDB(val) {
-  if (val === undefined || val === '' || val === 'null') return null;
-  return val;
-}
-
-// POST /api/upload-receipt
-app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
-  console.log('>>> /api/upload-receipt called');
-  try {
-    const file = req.file;
-    if (!file) {
-      return res.status(400).json({ success: false, error: 'Нет изображения (поле FormData должно называться "image")' });
-    }
-
-    console.log('📁 File:', file.originalname, 'Size:', file.size, 'Type:', file.mimetype);
-
-    const { model, currency, docType } = req.body;
-
-    // 1. Save file locally
-    const ext = path.extname(file.originalname) || '.jpg';
-    const savedName = `${Date.now()}${ext}`;
-    fs.writeFileSync(path.join(uploadsDir, savedName), file.buffer);
-
-    const host = req.get('host') || `localhost:${PORT}`;
-    const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-    let imageUrl = `${protocol}://${host}/uploads/${savedName}`;
-
-    // 2. Upload to Supabase Storage
+  // === LOGIN ===
+  const login = async () => {
     try {
-      const { error: upErr } = await supabase.storage
-        .from('receipts')
-        .upload(savedName, file.buffer, { contentType: file.mimetype });
-      if (!upErr) {
-        const { data: urlData } = supabase.storage.from('receipts').getPublicUrl(savedName);
-        imageUrl = urlData.publicUrl.replace('http://', 'https://');
-        console.log('✅ Supabase URL:', imageUrl);
+      const res = await fetch(`${API_URL}/api/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setToken(data.token);
+        setUser(data.user);
+        localStorage.setItem('token', data.token);
+        setLoginError('');
+        loadReceipts(data.token);
+      } else {
+        setLoginError(data.error || 'Неверный пароль');
       }
     } catch (e) {
-      console.error('⚠️ Supabase upload:', e.message);
+      setLoginError('Ошибка соединения');
     }
+  };
 
-    // 3. Compress image for AI
-    const compressedBuffer = await compressImage(file.buffer, 1500, 85);
-    const base64Image = compressedBuffer.toString('base64');
-    console.log('📐 Base64 length:', base64Image.length);
+  const logout = () => {
+    setToken(null);
+    setUser(null);
+    localStorage.removeItem('token');
+    setReceipts([]);
+  };
 
-    // 4. Recognize with fallback
-    let recognized = null;
-    let recognitionMethod = model || 'manual';
-    let recognitionError = null;
+  // === LOAD RECEIPTS ===
+  const loadReceipts = useCallback(async (authToken = token) => {
+    if (!authToken) return;
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/receipts?token=${authToken}`);
+      const data = await res.json();
+      const raw = Array.isArray(data) ? data : (data.receipts || []);
+      const processed = raw.map(r => ({
+        ...r,
+        image_url: fixImageUrl(r.image_url)
+      }));
+      setReceipts(processed);
+    } catch (e) {
+      console.error('Ошибка загрузки:', e);
+      setReceipts([]);
+    }
+    setLoading(false);
+  }, [token]);
 
-    const selectedModel = model || 'gemini-2.0-flash';
+  // === CHECK AUTH ===
+  useEffect(() => {
+    if (token) {
+      fetch(`${API_URL}/api/me?token=${token}`)
+        .then(r => r.json())
+        .then(data => {
+          const userData = data.user || data;
+          if ((data.success !== false) && (userData.id || userData.valid || data.id)) {
+            setUser(userData);
+            loadReceipts(token);
+          } else {
+            logout();
+          }
+        })
+        .catch(err => {
+          console.error('Auth check error:', err);
+        });
+    }
+  }, [token]);
+
+  // === FILE HANDLERS ===
+  const handleFileSelect = (e) => {
+    const files = Array.from(e.target.files).filter(f => f.type.startsWith('image/'));
+    if (files.length > 0) {
+      previewUrls.forEach(url => URL.revokeObjectURL(url));
+      const urls = files.map(f => URL.createObjectURL(f));
+      setSelectedFiles(files);
+      setCurrentFileIndex(0);
+      setPreviewUrls(urls);
+      setPreviewUrl(urls[0]);
+      setLastSavedReceipt(null);
+    }
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+    if (files.length > 0) {
+      previewUrls.forEach(url => URL.revokeObjectURL(url));
+      const urls = files.map(f => URL.createObjectURL(f));
+      setSelectedFiles(files);
+      setCurrentFileIndex(0);
+      setPreviewUrls(urls);
+      setPreviewUrl(urls[0]);
+      setLastSavedReceipt(null);
+    }
+  };
+
+  const nextFile = () => {
+    if (currentFileIndex < selectedFiles.length - 1) {
+      setCurrentFileIndex(currentFileIndex + 1);
+      setPreviewUrl(previewUrls[currentFileIndex + 1]);
+      setLastSavedReceipt(null);
+    }
+  };
+
+  const prevFile = () => {
+    if (currentFileIndex > 0) {
+      setCurrentFileIndex(currentFileIndex - 1);
+      setPreviewUrl(previewUrls[currentFileIndex - 1]);
+      setLastSavedReceipt(null);
+    }
+  };
+
+  // === RECOGNIZE AND SAVE (с предварительным сжатием!) ===
+  const recognizeAndSave = async () => {
+    if (!selectedFiles.length) return;
+    setRecognizing(true);
+    setLastSavedReceipt(null);
 
     try {
-      if (selectedModel.startsWith('gemini')) {
-        console.log('🔍 Gemini...');
-        recognized = await recognizeWithGemini(base64Image, 'image/jpeg', selectedModel);
-        recognitionMethod = selectedModel;
-      } else if (selectedModel.includes('vision')) {
-        console.log('🔍 Groq...');
-        recognized = await recognizeWithGroq(base64Image, 'image/jpeg', selectedModel);
-        recognitionMethod = selectedModel;
-      } else if (selectedModel.startsWith('ocr') || selectedModel.startsWith('ocrspace')) {
-        console.log('🔍 OCR.space...');
-        recognized = await recognizeWithOCRSpace(compressedBuffer, selectedModel);
-        recognitionMethod = selectedModel;
-      } else {
-        recognitionError = 'Unknown model: ' + selectedModel;
-      }
-    } catch (err) {
-      console.error('❌ Primary recognition failed:', err.message);
-      recognitionError = err.message;
+      const file = selectedFiles[currentFileIndex];
 
-      // Fallback на Gemini
-      if (!selectedModel.startsWith('gemini') && process.env.GEMINI_API_KEY) {
+      // === СЖИМАЕМ ИЗОБРАЖЕНИЕ ПЕРЕД ОТПРАВКОЙ ===
+      let fileToSend = file;
+      const isOCR = selectedModel.startsWith('ocr') || selectedModel.startsWith('ocrspace');
+      
+      // Для OCR.space сжимаем агрессивнее (лимит 1.5 MB)
+      if (isOCR) {
+        console.log('📉 OCR.space selected — aggressive compression...');
+        fileToSend = await compressImage(file, 1200, 0.65);
+      } else {
+        // Для Gemini/Groq — умеренное сжатие
+        fileToSend = await compressImage(file, 1500, 0.80);
+      }
+
+      const formData = new FormData();
+      formData.append('image', fileToSend);
+      formData.append('model', selectedModel);
+      formData.append('currency', currency);
+      formData.append('docType', docType);
+
+      const res = await fetch(`${API_URL}/api/upload-receipt?token=${token}`, {
+        method: 'POST',
+        body: formData
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Сервер вернул ${res.status}: ${text}`);
+      }
+
+      const data = await res.json();
+
+      if (!data.success && !data.id) {
+        throw new Error(data.error || data.message || 'Сохранение не удалось');
+      }
+
+      const receiptData = data.data || data;
+      if (receiptData.image_url) {
+        receiptData.image_url = fixImageUrl(receiptData.image_url);
+      }
+
+      setLastSavedReceipt(receiptData);
+      loadReceipts();
+
+    } catch (e) {
+      console.error('Ошибка:', e);
+      alert('Ошибка: ' + e.message);
+    }
+
+    setRecognizing(false);
+  };
+
+  // === DELETE RECEIPT ===
+  const deleteReceipt = async (id) => {
+    if (!window.confirm('Удалить чек?')) return;
+    try {
+      const res = await fetch(`${API_URL}/api/receipts/${id}?token=${token}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        loadReceipts();
+        if (viewModal && viewModal.id === id) setViewModal(null);
+      }
+    } catch (e) {
+      console.error('Ошибка удаления:', e);
+    }
+  };
+
+  // === EXPORT EXCEL ===
+  const exportExcel = async () => {
+    try {
+      const res = await fetch(`${API_URL}/api/export-excel?token=${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ receiptIds: [] })
+      });
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'receipts.xlsx';
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('Ошибка экспорта:', e);
+    }
+  };
+
+  // === LOAD MODELS ===
+  const loadModels = async () => {
+    setModelsLoading(true);
+    try {
+      const endpoints = [
+        { url: `${API_URL}/api/list-gemini-models`, provider: 'Gemini' },
+        { url: `${API_URL}/api/list-groq-models`, provider: 'Groq' },
+        { url: `${API_URL}/api/list-ocrspace-models`, provider: 'OCR.space' }
+      ];
+
+      let allModels = [];
+
+      for (const endpoint of endpoints) {
         try {
-          console.log('🔄 Fallback to Gemini...');
-          recognized = await recognizeWithGemini(base64Image, 'image/jpeg', 'gemini-2.0-flash');
-          recognitionMethod = 'gemini-2.0-flash (fallback)';
-          recognitionError = null;
-        } catch (fallbackErr) {
-          console.error('❌ Fallback also failed:', fallbackErr.message);
-          recognitionError += ' | Fallback: ' + fallbackErr.message;
+          const res = await fetch(endpoint.url);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.models) {
+              allModels = [...allModels, ...data.models.map(m => ({
+                name: m.id,
+                displayName: m.name || m.id,
+                provider: endpoint.provider,
+                status: 'ok'
+              }))];
+            }
+          }
+        } catch (e) {
+          console.error(`Error loading ${endpoint.provider}:`, e);
         }
       }
-    }
 
-    // 5. Если распознавание полностью провалилось
-    if (!recognized || (recognized.store_name === 'Unknown' && recognized.total_amount === 0 && recognized.items.length === 0)) {
-      if (recognitionError) {
-        return res.status(500).json({
-          success: false,
-          error: 'Распознавание не удалось: ' + recognitionError,
-          saved: false
-        });
-      }
+      setModels(allModels);
+    } catch (e) {
+      console.error('Ошибка загрузки моделей:', e);
     }
+    setModelsLoading(false);
+  };
 
-    // 6. Save to DB
-    const insertData = {
-      image_url: imageUrl,
-      currency: sanitizeForDB(currency) || sanitizeForDB(recognized?.currency) || 'AED',
-      document_type: docType || 'receipt',
-      recognition_method: recognitionMethod,
-      store_name: sanitizeForDB(recognized?.store_name) || 'Unknown',
-      store_name_ru: sanitizeForDB(recognized?.store_name_ru),
-      receipt_date: sanitizeForDB(recognized?.receipt_date),
-      receipt_time: sanitizeForDB(recognized?.receipt_time),
-      total_amount: recognized?.total_amount || 0,
-      subtotal: sanitizeForDB(recognized?.subtotal),
-      tax_amount: sanitizeForDB(recognized?.tax_amount),
-      tax_rate: sanitizeForDB(recognized?.tax_rate),
-      items: Array.isArray(recognized?.items) ? recognized.items : [],
-      raw_text: sanitizeForDB(recognized?.raw_text) || '',
-      created_at: new Date().toISOString()
+  // === HELPERS ===
+  const formatDate = (dateStr) => {
+    if (!dateStr) return '-';
+    return new Date(dateStr).toLocaleDateString('ru-RU');
+  };
+
+  const formatAmount = (amount, currency) => {
+    if (amount === null || amount === undefined) return '-';
+    return `${parseFloat(amount).toFixed(2)} ${currency || ''}`;
+  };
+
+  const getProviderColor = (provider) => {
+    const colors = {
+      'Gemini': '#4285f4',
+      'Groq': '#f55036',
+      'OCR.space': '#00a86b'
     };
+    return colors[provider] || '#888';
+  };
 
-    console.log('💾 DB insert:', {
-      store: insertData.store_name,
-      total: insertData.total_amount,
-      items: insertData.items.length
-    });
-
-    const { data: receipt, error } = await supabase.from('receipts').insert(insertData).select().single();
-    if (error) throw error;
-
-    console.log('✅ Saved ID:', receipt.id);
-
-    const response = { success: true, ...receipt };
-    if (recognitionError) {
-      response.recognition_error = recognitionError;
-      response.warning = 'Распознавание частично не удалось.';
-    }
-
-    res.json(response);
-  } catch (err) {
-    console.error('❌ CRASH:', err.message);
-    res.status(500).json({ success: false, error: err.message });
+  // === LOGIN SCREEN ===
+  if (!token) {
+    return (
+      <div className="App">
+        <div className="login-box">
+          <h1>🧾 Receipt Manager</h1>
+          <input 
+            type="password" 
+            placeholder="Введите пароль" 
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            onKeyPress={e => e.key === 'Enter' && login()}
+          />
+          <button onClick={login}>Войти</button>
+          {loginError && <p className="error">{loginError}</p>}
+          <p className="hint">Пароли: admin, user1-user20</p>
+        </div>
+      </div>
+    );
   }
-});
 
-app.post('/api/export-excel', async (req, res) => {
-  res.status(501).json({ success: false, error: 'Excel export пока не реализован' });
-});
+  // === MAIN APP ===
+  return (
+    <div className="App">
+      <header className="mini-header">
+        <div className="header-left">
+          <span className="logo-icon">🧾</span>
+        </div>
+        <div className="header-right">
+          <button className="logout-btn" onClick={logout}>🚪 Выйти</button>
+        </div>
+      </header>
 
-// ====== OPTIONAL MODULES ======
-function tryRequire(modulePath, routePath) {
-  try {
-    const mod = require(modulePath);
-    if (routePath) app.use(routePath, mod);
-    console.log(`✅ Loaded: ${modulePath}`);
-    return mod;
-  } catch (e) {
-    console.warn(`⚠️  Module not found: ${modulePath}`);
-    return null;
-  }
+      <nav className="tabs">
+        <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>
+          📤 Загрузка
+        </button>
+        <button className={activeTab === 'list' ? 'active' : ''} onClick={() => {setActiveTab('list'); loadReceipts();}}>
+          📋 Чеки ({receipts.length})
+        </button>
+      </nav>
+
+      {/* === VIEW MODAL === */}
+      {viewModal && (
+        <div className="modal-overlay" onClick={() => setViewModal(null)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>📄 Чек #{viewModal.id}</h2>
+              <button className="modal-close" onClick={() => setViewModal(null)}>✕</button>
+            </div>
+
+            <div className="modal-body">
+              <div className="modal-image-section">
+                {viewModal.image_url ? (
+                  <img src={viewModal.image_url} alt="Чек" className="modal-image" />
+                ) : (
+                  <div className="no-image">Нет фото</div>
+                )}
+              </div>
+
+              <div className="modal-info">
+                <div className="info-block">
+                  <h3>Основная информация</h3>
+                  <p><strong>Магазин:</strong> {viewModal.store_name_ru || viewModal.store_name || '—'}</p>
+                  <p><strong>Дата:</strong> {formatDate(viewModal.receipt_date)} {viewModal.receipt_time}</p>
+                  <p><strong>Итого:</strong> {formatAmount(viewModal.total_amount, viewModal.currency)}</p>
+                  <p><strong>Тип:</strong> {viewModal.document_type}</p>
+                  <p><strong>Метод:</strong> {viewModal.recognition_method || '—'}</p>
+                  {viewModal.subtotal && <p><strong>Подытог:</strong> {viewModal.subtotal}</p>}
+                  {viewModal.tax_amount && <p><strong>Налог:</strong> {viewModal.tax_amount} ({viewModal.tax_rate || ''})</p>}
+                </div>
+
+                <div className="info-block">
+                  <h3>Товары ({viewModal.items?.length || 0})</h3>
+                  <table className="items-table">
+                    <thead>
+                      <tr>
+                        <th>№</th>
+                        <th>Товар</th>
+                        <th>Кол-во</th>
+                        <th>Цена</th>
+                        <th>Сумма</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(viewModal.items || []).map((item, i) => (
+                        <tr key={i}>
+                          <td>{i + 1}</td>
+                          <td>{item.name_ru || item.name || '—'}</td>
+                          <td>{item.quantity}</td>
+                          <td>{item.price}</td>
+                          <td>{item.total}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {viewModal.raw_text && (
+                  <div className="info-block">
+                    <h3>Распознанный текст</h3>
+                    <pre className="raw-text">{viewModal.raw_text}</pre>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="modal-footer">
+              <button onClick={() => setViewModal(null)}>Закрыть</button>
+              <button className="danger" onClick={() => deleteReceipt(viewModal.id)}>🗑️ Удалить</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* === UPLOAD TAB === */}
+      {activeTab === 'upload' && (
+        <div className="upload-section">
+          <div className="top-controls">
+            <button 
+              className="model-toggle-btn"
+              onClick={() => {setShowModelSelector(!showModelSelector); if (!models.length) loadModels();}}
+            >
+              🤖 {showModelSelector ? 'Скрыть' : `Выбор модели (${models.length})`}
+            </button>
+
+            {showModelSelector && (
+              <div className="model-dropdown" style={{ maxHeight: '400px', overflowY: 'auto' }}>
+                {modelsLoading ? (
+                  <p>Загрузка...</p>
+                ) : (
+                  <div className="models-grid">
+                    {models.map(model => (
+                      <div 
+                        key={`${model.provider}-${model.name}`} 
+                        className={`model-option ${selectedModel === model.name ? 'selected' : ''}`}
+                        onClick={() => {
+                          setSelectedModel(model.name);
+                          setShowModelSelector(false);
+                        }}
+                        title={`${model.provider} — ${model.displayName}`}
+                      >
+                        <span className="provider-badge" style={{ backgroundColor: getProviderColor(model.provider) }}>
+                          {model.provider}
+                        </span>
+                        <span className="model-name">{model.displayName}</span>
+                        <span className="status-ok">✅</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="current-model">
+              <small>Модель: <strong>{selectedModel}</strong></small>
+            </div>
+          </div>
+
+          <div 
+            className="drop-zone"
+            onDrop={handleDrop}
+            onDragOver={e => e.preventDefault()}
+          >
+            <input 
+              type="file" 
+              accept="image/*" 
+              multiple
+              onChange={handleFileSelect} 
+              id="file-input" 
+            />
+            <label htmlFor="file-input">
+              {previewUrl ? (
+                <div className="preview-container">
+                  <img src={previewUrl} alt="Preview" className="preview" />
+                  {selectedFiles.length > 1 && (
+                    <div className="file-nav">
+                      <button onClick={(e) => {e.preventDefault(); prevFile();}} disabled={currentFileIndex === 0}>◀</button>
+                      <span>{currentFileIndex + 1} / {selectedFiles.length}</span>
+                      <button onClick={(e) => {e.preventDefault(); nextFile();}} disabled={currentFileIndex === selectedFiles.length - 1}>▶</button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="drop-text">
+                  <p>📷 Перетащите фото чека сюда</p>
+                  <p>или нажмите для выбора файлов</p>
+                  <p className="hint">Можно выбрать несколько файлов</p>
+                </div>
+              )}
+            </label>
+          </div>
+
+          <div className="controls-row">
+            <div className="control-group">
+              <label>Валюта:</label>
+              <select value={currency} onChange={e => setCurrency(e.target.value)}>
+                <option value="AED">AED (Дирхам)</option>
+                <option value="EUR">EUR (Евро)</option>
+                <option value="USD">USD (Доллар)</option>
+                <option value="RUB">RUB (Рубль)</option>
+              </select>
+            </div>
+
+            <div className="control-group">
+              <label>Тип:</label>
+              <select value={docType} onChange={e => setDocType(e.target.value)}>
+                <option value="receipt">Чек</option>
+                <option value="invoice">Фактура</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="recognize-bar">
+            <button 
+              className="recognize-main-btn full-width"
+              onClick={recognizeAndSave}
+              disabled={!selectedFiles.length || recognizing}
+            >
+              {recognizing ? '⏳ Распознавание...' : '🔍 Распознать и сохранить'}
+            </button>
+          </div>
+
+          {lastSavedReceipt && (
+            <div className="saved-receipt-card">
+              <h3>✅ Чек сохранён</h3>
+              <div className="receipt-preview">
+                {lastSavedReceipt.image_url && (
+                  <img src={lastSavedReceipt.image_url} alt="Чек" className="receipt-image" />
+                )}
+                <div className="receipt-info">
+                  <p><strong>ID:</strong> {lastSavedReceipt.id}</p>
+                  <p><strong>Магазин:</strong> {lastSavedReceipt.store_name_ru || lastSavedReceipt.store_name || '—'}</p>
+                  <p><strong>Дата:</strong> {formatDate(lastSavedReceipt.receipt_date)}</p>
+                  <p><strong>Итого:</strong> {formatAmount(lastSavedReceipt.total_amount, lastSavedReceipt.currency)}</p>
+                  <p><strong>Товаров:</strong> {lastSavedReceipt.items?.length || 0}</p>
+                </div>
+              </div>
+              <button className="close-btn" onClick={() => setLastSavedReceipt(null)}>Закрыть</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* === LIST TAB === */}
+      {activeTab === 'list' && (
+        <div className="list-section">
+          <div className="filters">
+            <select value={filterType} onChange={e => {setFilterType(e.target.value); loadReceipts();}}>
+              <option value="all">Все</option>
+              <option value="receipt">Чеки</option>
+              <option value="invoice">Фактуры</option>
+            </select>
+            <input 
+              type="text" 
+              placeholder="Поиск..." 
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+            />
+            <button onClick={exportExcel}>📥 Excel</button>
+            <button onClick={() => loadReceipts()}>🔄 Обновить</button>
+          </div>
+
+          {loading ? (
+            <p>Загрузка...</p>
+          ) : receipts.length === 0 ? (
+            <p>Нет чеков. Загрузите первый!</p>
+          ) : (
+            <div className="receipts-grid">
+              {receipts.filter(r => {
+                if (!searchQuery) return true;
+                const q = searchQuery.toLowerCase();
+                return (r.store_name_ru || r.store_name || '').toLowerCase().includes(q) ||
+                       (r.raw_text || '').toLowerCase().includes(q);
+              }).map(receipt => (
+                <div key={receipt.id} className="receipt-card">
+                  <div className="receipt-header">
+                    <h3>{receipt.store_name_ru || receipt.store_name || 'Без названия'}</h3>
+                    <span className="type-badge">{receipt.document_type}</span>
+                  </div>
+                  <p className="date">{formatDate(receipt.receipt_date)} {receipt.receipt_time}</p>
+                  <p className="amount">{formatAmount(receipt.total_amount, receipt.currency)}</p>
+                  <p className="items-count">🛒 {receipt.items?.length || 0} товаров</p>
+                  {receipt.image_url && (
+                    <img src={receipt.image_url} alt="Чек" className="receipt-thumb" />
+                  )}
+                  <div className="receipt-actions">
+                    <button onClick={() => setViewModal(receipt)}>👁️ Просмотр</button>
+                    <button onClick={() => deleteReceipt(receipt.id)} className="danger">🗑️ Удалить</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
-tryRequire('./identify', '/api/identify');
-tryRequire('./identify-groq', '/api/identify-groq');
-tryRequire('./identify-ocrspace', '/api/identify-ocrspace');
-tryRequire('./list-and-test-models', '/api/list-and-test-models');
-tryRequire('./compare-recognize', '/api/compare-recognize');
 
-// ====== Health ======
-app.get('/', (req, res) => res.json({ status: 'ok', message: 'Receipt Manager API', timestamp: new Date().toISOString() }));
-app.get('/api/health', (req, res) => res.json({
-  status: 'ok',
-  gemini: process.env.GEMINI_API_KEY ? '✅' : '❌',
-  groq: process.env.GROQ_API_KEY ? '✅' : '❌',
-  ocrspace: process.env.OCRSPACE_API_KEY ? '✅' : '❌',
-  supabase: process.env.SUPABASE_URL ? '✅' : '❌'
-}));
-
-app.use((err, req, res, next) => {
-  console.error('❌ Error:', err.message);
-  res.status(500).json({ success: false, error: err.message });
-});
-
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ API на порту ${PORT}`);
-  console.log(`🤖 Gemini: ${process.env.GEMINI_API_KEY ? '✅' : '❌'}`);
-  console.log(`⚡ Groq: ${process.env.GROQ_API_KEY ? '✅' : '❌'}`);
-  console.log(`📷 OCR.space: ${process.env.OCRSPACE_API_KEY ? '✅' : '❌'}`);
-});
+export default App;
