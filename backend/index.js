@@ -240,10 +240,13 @@ async function recognizeWithGroq(base64Image, mimeType, modelId) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error('GROQ_API_KEY не настроен');
 
-  // Только vision-модели Groq поддерживают изображения
+  // Vision-модели Groq (поддерживают изображения)
   const visionModels = [
     'llama-3.2-11b-vision-preview',
-    'llama-3.2-90b-vision-preview'
+    'llama-3.2-90b-vision-preview',
+    'meta-llama/llama-4-scout-17b-16e-instruct',
+    'meta-llama/llama-4-maverick-17b-128e-instruct',
+    'qwen/qwen3.6-27b'
   ];
 
   // Если выбрана НЕ vision-модель — ошибка
