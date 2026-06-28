@@ -225,18 +225,13 @@ async function recognizeWithOCRSpace(buffer, modelId) {
   formData.append('OCREngine', engine);
   formData.append('scale', 'true');
 
-  const response = await axios.post('https://api.ocr.space/parse/image', formData, {
+    const response = await axios.post('https://api.ocr.space/parse/image', formData, {
     headers: { ...formData.getHeaders() },
     maxContentLength: Infinity,
     maxBodyLength: Infinity,
     timeout: 30000
   });
 
-  if (result.IsErroredOnProcessing) {
-    const err = result.ErrorMessage?.[0] || JSON.stringify(result);
-    throw new Error(`OCR.space ${response.status}: ${err}`);
-  }
-  
   const result = response.data;
   
   if (result.IsErroredOnProcessing) {
