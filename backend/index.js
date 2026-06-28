@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const sharp = require('sharp');
+const FormData = require('form-data');
 const { createClient } = require('@supabase/supabase-js');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const ws = require('ws');
@@ -12,7 +13,7 @@ const ws = require('ws');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ====== Multer (FormData) ======
+// ====== Multer ======
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }
@@ -72,7 +73,6 @@ async function recognizeWithGemini(base64Image, mimeType, modelId) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY не настроен');
 
-  // ИСПРАВЛЕНО: gemini-2.0-flash вместо gemini-1.5-flash (удалена Google)
   const modelName = modelId && modelId.startsWith('gemini') ? modelId : 'gemini-2.0-flash';
   console.log('🤖 Gemini model:', modelName);
 
@@ -170,8 +170,8 @@ async function recognizeWithGroq(base64Image, mimeType, modelId) {
   }
 }
 
-// 3. OCR.SPACE
-async function recognizeWithOCRSpace(base64Image, modelId) {
+// 3. OCR.SPACE — полноценная версия с парсингом
+async function recognizeWithOCRSpace(buffer, modelId) {
   const apiKey = process.env.OCRSPACE_API_KEY;
   if (!apiKey) throw new Error('OCRSPACE_API_KEY не настроен');
 
@@ -182,58 +182,229 @@ async function recognizeWithOCRSpace(base64Image, modelId) {
   };
   const engine = engineMap[modelId] || '2';
 
-  const formData = new URLSearchParams();
+  // Сжимаем если нужно (OCR.space лимит ~1.5MB base64)
+  let imageBuffer = buffer;
+  let base64Data = buffer.toString('base64');
+  
+  if (base64Data.length > 1000000) {
+    console.log('📉 Extra compression for OCR.space...');
+    imageBuffer = await compressImage(buffer, 1200, 75);
+    base64Data = imageBuffer.toString('base64');
+  }
+  console.log('📐 OCR.space base64 length:', base64Data.length);
+
+  const formData = new FormData();
   formData.append('apikey', apiKey);
-  formData.append('base64Image', `data:image/jpeg;base64,${base64Image}`);
+  formData.append('base64Image', `data:image/jpeg;base64,${base64Data}`);
   formData.append('language', 'eng');
   formData.append('isOverlayRequired', 'false');
   formData.append('detectOrientation', 'true');
-  formData.append('scale', 'true');
   formData.append('OCREngine', engine);
+  formData.append('scale', 'true');
 
   const response = await fetch('https://api.ocr.space/parse/image', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: formData.toString()
+    headers: formData.getHeaders(),
+    body: formData
   });
 
   if (!response.ok) {
     const err = await response.text();
     throw new Error(`OCR.space ${response.status}: ${err}`);
   }
+  
   const result = await response.json();
-
-  if (result.IsErroOnProcessing) throw new Error(`OCR.space error: ${result.ErrorMessage}`);
+  
+  if (result.IsErroredOnProcessing) {
+    throw new Error(`OCR.space error: ${result.ErrorMessage?.[0] || JSON.stringify(result)}`);
+  }
+  
   const parsedText = result.ParsedResults?.[0]?.ParsedText || '';
+  console.log('📝 OCR.space text (first 500 chars):', parsedText.substring(0, 500));
 
+  // Полноценный парсинг
+  const data = parseReceiptText(parsedText);
+  
+  console.log('✅ OCR.space parsed:', {
+    store: data.store_name,
+    total: data.total,
+    items: data.items.length
+  });
+  
   return {
-    store_name: 'Unknown', store_name_ru: null, receipt_date: null, receipt_time: null,
-    total_amount: extractTotal(parsedText), subtotal: null, tax_amount: null, tax_rate: null,
-    currency: extractCurrency(parsedText), items: [], raw_text: parsedText
+    store_name: data.store_name || 'Unknown',
+    store_name_ru: data.store_name_ru || null,
+    receipt_date: data.date,
+    receipt_time: data.time,
+    total_amount: data.total || 0,
+    subtotal: data.subtotal || null,
+    tax_amount: data.tax || null,
+    tax_rate: data.tax_rate || null,
+    currency: data.currency || 'AED',
+    items: data.items || [],
+    raw_text: parsedText
   };
 }
 
-function extractTotal(text) {
-  const patterns = [
-    /TOTAL\s*DUE\s*[€$£AED]*\s*([\d,]+\.?\d*)/i,
-    /TOTAL\s*[€$£AED]*\s*([\d,]+\.?\d*)/i,
-    /ИТОГО\s*[€$£AED]*\s*([\d,]+\.?\d*)/i,
-    /AMOUNT\s*DUE\s*[€$£AED]*\s*([\d,]+\.?\d*)/i,
-    /([\d,]+\.?\d*)\s*(AED|EUR|USD|\$|€)/i
-  ];
-  for (const p of patterns) {
-    const m = text.match(p);
-    if (m) return parseFloat(m[1].replace(/,/g, ''));
+// === ПАРСИНГ OCR.SPACE (полноценный, из identify-ocrspace.js) ===
+function parseReceiptText(fullText) {
+  const data = {
+    store_name: '',
+    store_name_ru: '',
+    date: null,
+    time: null,
+    total: 0,
+    subtotal: 0,
+    tax: 0,
+    tax_rate: null,
+    currency: detectCurrency(fullText),
+    country: null,
+    items: [],
+    payment_method: null,
+    payment_amount: 0
+  };
+
+  const lines = fullText.split('\n').map(l => l.trim()).filter(l => l);
+
+  // Магазин
+  if (lines.length > 0) {
+    data.store_name = lines[0];
+    data.store_name_ru = translateToRussian(lines[0]);
   }
-  return 0;
+
+  // Дата
+  const dateMatch = fullText.match(/(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{2,4})/);
+  if (dateMatch) {
+    const [, d, m, y] = dateMatch;
+    const year = y.length === 2 ? '20' + y : y;
+    data.date = `${year}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+  }
+  
+  const timeMatch = fullText.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (timeMatch) data.time = `${timeMatch[1].padStart(2,'0')}:${timeMatch[2]}`;
+
+  // Итоговая сумма
+  const totalPatterns = [
+    /(?:GRAND\s*)?TOTAL[:\s]*[A-Z]{0,3}\s*([\d,.]+)/i,
+    /ИТОГО[:\s]*([\d,.]+)/i,
+    /ВСЕГО[:\s]*([\d,.]+)/i,
+    /TOTAL\s*DUE[:\s]*([\d,.]+)/i,
+    /TOTAL\s*DUE\s*:?\s*([\d,.]+)/i,
+    /AMOUNT\s*DUE[:\s]*([\d,.]+)/i
+  ];
+  
+  for (const pattern of totalPatterns) {
+    const match = fullText.match(pattern);
+    if (match) {
+      data.total = parseFloat(match[1].replace(/,/g, ''));
+      break;
+    }
+  }
+
+  // Налог VAT
+  const vatMatch = fullText.match(/(?:VAT|НДС|TAX)[^\d]*(\d+)?%?[:\s]*[A-Z]{0,3}\s*([\d,.]+)/i);
+  if (vatMatch) {
+    if (vatMatch[1]) data.tax_rate = vatMatch[1] + '%';
+    data.tax = parseFloat(vatMatch[2].replace(/,/g, ''));
+  }
+
+  // Subtotal
+  const subMatch = fullText.match(/(?:SUBTOTAL|SUB\s*TOTAL|Total before VAT)[:\s]*[A-Z]{0,3}\s*([\d,.]+)/i);
+  if (subMatch) {
+    data.subtotal = parseFloat(subMatch[1].replace(/,/g, ''));
+  }
+
+  // Товары - паттерн 1: "название x кол-во цена сумма"
+  const pattern1 = /^(.+?)\s+(\d+)\s*[xX×]\s*([\d,.]+)\s+([\d,.]+)/gm;
+  let match;
+  while ((match = pattern1.exec(fullText)) !== null) {
+    const [, name, qty, price, total] = match;
+    if (isProductLine(name)) {
+      data.items.push({
+        name: name.trim(),
+        name_ru: translateToRussian(name.trim()),
+        quantity: parseInt(qty),
+        price: parseFloat(price.replace(/,/g, '')),
+        total: parseFloat(total.replace(/,/g, ''))
+      });
+    }
+  }
+
+  // Паттерн 2: "название  кол-во  цена  сумма"
+  if (data.items.length === 0) {
+    const pattern2 = /^(.+?)\s{2,}(\d+)\s+([\d,.]+)\s+([\d,.]+)\s*$/gm;
+    while ((match = pattern2.exec(fullText)) !== null) {
+      const [, name, qty, price, total] = match;
+      if (isProductLine(name)) {
+        data.items.push({
+          name: name.trim(),
+          name_ru: translateToRussian(name.trim()),
+          quantity: parseInt(qty),
+          price: parseFloat(price.replace(/,/g, '')),
+          total: parseFloat(total.replace(/,/g, ''))
+        });
+      }
+    }
+  }
+
+  // Паттерн 3: "название цена"
+  if (data.items.length === 0) {
+    const pattern3 = /^(.+?)\s+([\d]{1,4}[.,]\d{2})\s*$/gm;
+    while ((match = pattern3.exec(fullText)) !== null) {
+      const [, name, price] = match;
+      if (isProductLine(name)) {
+        const p = parseFloat(price.replace(/,/g, ''));
+        data.items.push({
+          name: name.trim(),
+          name_ru: translateToRussian(name.trim()),
+          quantity: 1,
+          price: p,
+          total: p
+        });
+      }
+    }
+  }
+
+  // Страна
+  if (/DUBAI|UAE|UNITED ARAB/i.test(fullText)) data.country = 'UAE';
+  else if (/RUSSIA|РОССИЯ|МОСКВА/i.test(fullText)) data.country = 'RU';
+  else if (/GERMANY|FRANCE|ITALY/i.test(fullText)) data.country = 'EU';
+
+  return data;
 }
 
-function extractCurrency(text) {
-  if (text.includes('AED') || text.includes('Aed')) return 'AED';
-  if (text.includes('EUR') || text.includes('€')) return 'EUR';
-  if (text.includes('USD') || text.includes('$')) return 'USD';
-  if (text.includes('RUB') || text.includes('₽')) return 'RUB';
+function detectCurrency(fullText) {
+  if (fullText.includes('AED') || fullText.includes('د.إ') || /DIRHAM|DIRHAMS/i.test(fullText) || /DUBAI|UAE/i.test(fullText)) return 'AED';
+  if (fullText.includes('€') || /EURO|EUR\b/i.test(fullText)) return 'EUR';
+  if (fullText.includes('$') || /USD\b|DOLLAR/i.test(fullText)) return 'USD';
+  if (fullText.includes('₽') || /RUB|RUBLE|РУБ/i.test(fullText)) return 'RUB';
   return 'AED';
+}
+
+function isProductLine(name) {
+  if (!name || name.length < 2 || name.length > 100) return false;
+  const excluded = ['total', 'subtotal', 'итого', 'всего', 'vat', 'ндс', 'tax', 'налог', 'cash', 'card', 'visa', 'mastercard', 'payment', 'change', 'сдача', 'receipt', 'чек', 'date', 'дата', 'time', 'время', 'thank', 'спасибо', 'address', 'адрес', 'tel', 'phone', 'тел', 'www', 'http', 'email', 'order', 'delivery', 'prepayment', 'amounts in', 'all amounts', 'manager', 'driver', 'order accepted', 'delivery time', 'order delivered'];
+  const lower = name.toLowerCase();
+  return !excluded.some(e => lower.includes(e));
+}
+
+function translateToRussian(text) {
+  if (!text) return '';
+  const translations = {
+    'Pickled Cabbage': 'Маринованная капуста',
+    'Pickled Herring with Potato': 'Маринованная сельдь с картофелем',
+    'Mini Chebureki': 'Мини чебуреки',
+    'Borscht': 'Борщ',
+    'Beetroot Soup': 'Свекольный суп',
+    'Okroshka': 'Окрошка',
+    'Summer Soup': 'Летний суп',
+    'Beef Cutlets': 'Говяжьи котлеты',
+    'Fish Cutlets': 'Рыбные котлеты',
+    'Horseradish Jar': 'Баночка хрена',
+    'Plastic Bag': 'Пластиковый пакет',
+    'Coca-Cola': 'Кока-Кола'
+  };
+  return translations[text] || text;
 }
 
 // ====== LIST MODELS ======
@@ -330,7 +501,7 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
       console.error('⚠️ Supabase upload:', e.message);
     }
 
-    // 3. Compress image for AI recognition
+    // 3. Compress image for AI
     const compressedBuffer = await compressImage(file.buffer, 1500, 85);
     const base64Image = compressedBuffer.toString('base64');
     console.log('📐 Base64 length:', base64Image.length);
@@ -340,7 +511,6 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     let recognitionMethod = model || 'manual';
     let recognitionError = null;
 
-    // ИСПРАВЛЕНО: gemini-2.0-flash по умолчанию
     const selectedModel = model || 'gemini-2.0-flash';
 
     try {
@@ -354,13 +524,7 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
         recognitionMethod = selectedModel;
       } else if (selectedModel.startsWith('ocr') || selectedModel.startsWith('ocrspace')) {
         console.log('🔍 OCR.space...');
-        // Для OCR.space дополнительно сжимаем до < 1 МБ base64
-        let ocrBuffer = compressedBuffer;
-        if (base64Image.length > 1000000) {
-          console.log('📉 Extra compression for OCR.space...');
-          ocrBuffer = await compressImage(file.buffer, 1200, 75);
-        }
-        recognized = await recognizeWithOCRSpace(ocrBuffer.toString('base64'), selectedModel);
+        recognized = await recognizeWithOCRSpace(compressedBuffer, selectedModel);
         recognitionMethod = selectedModel;
       } else {
         recognitionError = 'Unknown model: ' + selectedModel;
