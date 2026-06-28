@@ -48,7 +48,59 @@ app.use('/uploads', express.static(uploadsDir));
 const authOwners = require('./auth-owners');
 app.use('/api', authOwners);
 
-// ====== INLINE ROUTES (не требуют отдельных файлов) ======
+// ====== INLINE LIST-MODELS ROUTES (гарантированно без 404) ======
+
+app.get('/api/list-gemini-models', (req, res) => {
+  res.json({
+    models: [
+      { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash' },
+      { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro' },
+      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash' }
+    ]
+  });
+});
+
+app.get('/api/list-groq-models', (req, res) => {
+  res.json({
+    models: [
+      { id: 'llama3-8b-8192', name: 'Llama 3 8B' },
+      { id: 'llama3-70b-8192', name: 'Llama 3 70B' },
+      { id: 'mixtral-8x7b-32768', name: 'Mixtral 8x7B' },
+      { id: 'gemma-7b-it', name: 'Gemma 7B' }
+    ]
+  });
+});
+
+app.get('/api/list-ocrspace-models', (req, res) => {
+  res.json({
+    models: [
+      { id: 'ocrspace-default', name: 'OCR.space Default' },
+      { id: 'ocrspace-2', name: 'OCR.space Engine 2' }
+    ]
+  });
+});
+
+app.get('/api/list-anthropic-models', (req, res) => {
+  res.json({
+    models: [
+      { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet' },
+      { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus' },
+      { id: 'claude-3-haiku-20240307', name: 'Claude 3 Haiku' }
+    ]
+  });
+});
+
+app.get('/api/list-openai-models', (req, res) => {
+  res.json({
+    models: [
+      { id: 'gpt-4o', name: 'GPT-4o' },
+      { id: 'gpt-4-turbo', name: 'GPT-4 Turbo' },
+      { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo' }
+    ]
+  });
+});
+
+// ====== INLINE CORE ROUTES ======
 
 // GET /api/receipts — список чеков
 app.get('/api/receipts', async (req, res) => {
@@ -148,11 +200,6 @@ function tryRequire(modulePath, routePath) {
 tryRequire('./identify', '/api/identify');
 tryRequire('./identify-groq', '/api/identify-groq');
 tryRequire('./identify-ocrspace', '/api/identify-ocrspace');
-tryRequire('./list-gemini-models', '/api/list-gemini-models');
-tryRequire('./list-groq-models', '/api/list-groq-models');
-tryRequire('./list-ocrspace-models', '/api/list-ocrspace-models');
-tryRequire('./list-anthropic-models', '/api/list-anthropic-models');
-tryRequire('./list-openai-models', '/api/list-openai-models');
 tryRequire('./list-and-test-models', '/api/list-and-test-models');
 tryRequire('./compare-recognize', '/api/compare-recognize');
 
