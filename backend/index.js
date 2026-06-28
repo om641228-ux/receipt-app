@@ -39,7 +39,7 @@ async function recognizeWithGemini(base64Image, mimeType, modelId) {
   const model = modelId && modelId.startsWith('gemini') ? modelId : 'gemini-1.5-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-  const prompt = `Ты — эксперт по распознаванию чеков и фактур. Проанализируй изображение и верни результат СТРОГО в формате JSON (без markdown, только чистый JSON).
+  const prompt = `Ты — эксперт по распознаванию чеков. Проанализируй изображение и верни результат СТРОГО в формате JSON (без markdown, только чистый JSON).
 
 Извлеки:
 - store_name: название магазина
@@ -54,7 +54,7 @@ async function recognizeWithGemini(base64Image, mimeType, modelId) {
 - items: массив [{name, name_ru, quantity, price, total}]
 - raw_text: полный текст чека
 
-Если поле не найдено — null или пустая строка.`;
+Если поле не найдено — используй null (не пустую строку).`;
 
   const response = await fetch(url, {
     method: 'POST',
@@ -76,38 +76,28 @@ async function recognizeWithGemini(base64Image, mimeType, modelId) {
     const clean = text.replace(/```json\s*/g,'').replace(/```\s*/g,'').trim();
     return JSON.parse(clean);
   } catch (e) {
-    return { store_name:'Unknown', store_name_ru:'', receipt_date:null, receipt_time:'', total_amount:0, subtotal:null, tax_amount:null, tax_rate:'', currency:'', items:[], raw_text:text };
+    return { store_name:'Unknown', store_name_ru:null, receipt_date:null, receipt_time:null, total_amount:0, subtotal:null, tax_amount:null, tax_rate:null, currency:null, items:[], raw_text:text };
   }
 }
 
-// 2. GROQ (Vision models)
+// 2. GROQ (Vision)
 async function recognizeWithGroq(base64Image, mimeType, modelId) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error('GROQ_API_KEY не настроен');
-
-  // Groq vision models
-  const visionModels = [
-    'llama-3.2-11b-vision-preview',
-    'llama-3.2-90b-vision-preview'
-  ];
+  const visionModels = ['llama-3.2-11b-vision-preview', 'llama-3.2-90b-vision-preview'];
   const model = visionModels.includes(modelId) ? modelId : 'llama-3.2-11b-vision-preview';
-
-  const url = 'https://api.groq.com/openai/v1/chat/completions';
   const dataUrl = `data:${mimeType || 'image/jpeg'};base64,${base64Image}`;
 
-  const response = await fetch(url, {
+  const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: model,
-      messages: [
-        { role: 'user', content: [
-          { type: 'text', text: 'Проанализируй этот чек/фактуру. Верни результат СТРОГО в JSON формате: {store_name, store_name_ru, receipt_date (YYYY-MM-DD), receipt_time (HH:MM), total_amount (число), subtotal, tax_amount, tax_rate, currency, items: [{name, name_ru, quantity, price, total}], raw_text}. Если поле не найдено — null.' },
-          { type: 'image_url', image_url: { url: dataUrl } }
-        ]}
-      ],
-      temperature: 0.1,
-      max_tokens: 4096
+      messages: [{ role: 'user', content: [
+        { type: 'text', text: 'Проанализируй этот чек. Верни результат СТРОГО в JSON: {store_name, store_name_ru, receipt_date (YYYY-MM-DD), receipt_time (HH:MM), total_amount (число), subtotal, tax_amount, tax_rate, currency, items:[{name, name_ru, quantity, price, total}], raw_text}. Если поле не найдено — null.' },
+        { type: 'image_url', image_url: { url: dataUrl } }
+      ]}],
+      temperature: 0.1, max_tokens: 4096
     })
   });
 
@@ -119,7 +109,7 @@ async function recognizeWithGroq(base64Image, mimeType, modelId) {
     const clean = text.replace(/```json\s*/g,'').replace(/```\s*/g,'').trim();
     return JSON.parse(clean);
   } catch (e) {
-    return { store_name:'Unknown', store_name_ru:'', receipt_date:null, receipt_time:'', total_amount:0, subtotal:null, tax_amount:null, tax_rate:'', currency:'', items:[], raw_text:text };
+    return { store_name:'Unknown', store_name_ru:null, receipt_date:null, receipt_time:null, total_amount:0, subtotal:null, tax_amount:null, tax_rate:null, currency:null, items:[], raw_text:text };
   }
 }
 
@@ -129,14 +119,9 @@ async function recognizeWithOCRSpace(base64Image, modelId) {
   if (!apiKey) throw new Error('OCRSPACE_API_KEY не настроен');
 
   const engineMap = {
-    'ocrspace-default': '1',
-    'ocrspace-engine2': '2',
-    'ocrspace-engine3': '3',
-    'ocrspace-engine5': '5',
-    'ocrspace-handwritten': '2',
-    'ocrspace-receipt': '5',
-    'ocr-engine-1': '1',
-    'ocr-engine-2': '2'
+    'ocrspace-default': '1', 'ocrspace-engine2': '2', 'ocrspace-engine3': '3',
+    'ocrspace-engine5': '5', 'ocrspace-handwritten': '2', 'ocrspace-receipt': '5',
+    'ocr-engine-1': '1', 'ocr-engine-2': '2'
   };
   const engine = engineMap[modelId] || '2';
 
@@ -158,42 +143,25 @@ async function recognizeWithOCRSpace(base64Image, modelId) {
   if (!response.ok) { const err = await response.text(); throw new Error(`OCR.space ${response.status}: ${err}`); }
   const result = await response.json();
 
-  if (result.IsErroOnProcessing) {
-    throw new Error(`OCR.space error: ${result.ErrorMessage}`);
-  }
-
+  if (result.IsErroOnProcessing) throw new Error(`OCR.space error: ${result.ErrorMessage}`);
   const parsedText = result.ParsedResults?.[0]?.ParsedText || '';
 
-  // OCR.space только текст, без структуры — парсим простейшее
   return {
-    store_name: 'Unknown',
-    store_name_ru: '',
-    receipt_date: null,
-    receipt_time: '',
-    total_amount: extractTotal(parsedText),
-    subtotal: null,
-    tax_amount: null,
-    tax_rate: '',
-    currency: extractCurrency(parsedText),
-    items: [],
-    raw_text: parsedText
+    store_name: 'Unknown', store_name_ru: null, receipt_date: null, receipt_time: null,
+    total_amount: extractTotal(parsedText), subtotal: null, tax_amount: null, tax_rate: null,
+    currency: extractCurrency(parsedText), items: [], raw_text: parsedText
   };
 }
 
-// Helpers
 function extractTotal(text) {
   const patterns = [
-    /TOTAL\s*[:€$£AED]*\s*([\d,]+\.?\d*)/i,
-    /TOTAL\s*DUE\s*[:€$£AED]*\s*([\d,]+\.?\d*)/i,
-    /ИТОГО\s*[:€$£AED]*\s*([\d,]+\.?\d*)/i,
-    /TOTAL\s*AMOUNT\s*[:€$£AED]*\s*([\d,]+\.?\d*)/i,
-    /AMOUNT\s*DUE\s*[:€$£AED]*\s*([\d,]+\.?\d*)/i,
+    /TOTAL\s*DUE\s*[€$£AED]*\s*([\d,]+\.?\d*)/i,
+    /TOTAL\s*[€$£AED]*\s*([\d,]+\.?\d*)/i,
+    /ИТОГО\s*[€$£AED]*\s*([\d,]+\.?\d*)/i,
+    /AMOUNT\s*DUE\s*[€$£AED]*\s*([\d,]+\.?\d*)/i,
     /([\d,]+\.?\d*)\s*(AED|EUR|USD|\$|€)/i
   ];
-  for (const p of patterns) {
-    const m = text.match(p);
-    if (m) return parseFloat(m[1].replace(/,/g, ''));
-  }
+  for (const p of patterns) { const m = text.match(p); if (m) return parseFloat(m[1].replace(/,/g,'')); }
   return 0;
 }
 
@@ -327,64 +295,69 @@ app.delete('/api/receipts/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// POST /api/upload-receipt — СОХРАНЕНИЕ + РАСПОЗНАВАНИЕ (3 провайдера)
+// Helper: sanitize values for Supabase
+function sanitizeForDB(val) {
+  if (val === undefined || val === '' || val === 'null') return null;
+  return val;
+}
+
+// POST /api/upload-receipt
 app.post('/api/upload-receipt', async (req, res) => {
   try {
     const { image, fileName, fileType, model, currency, docType } = req.body;
     if (!image) return res.status(400).json({ success: false, error: 'Нет изображения' });
 
-    // 1. Сохраняем файл
+    // 1. Save file
     const buffer = Buffer.from(image, 'base64');
     const ext = fileName ? path.extname(fileName) : '.jpg';
     const savedName = `${Date.now()}${ext}`;
-    const filePath = path.join(uploadsDir, savedName);
-    fs.writeFileSync(filePath, buffer);
+    fs.writeFileSync(path.join(uploadsDir, savedName), buffer);
 
     const host = req.get('host') || `localhost:${PORT}`;
     const protocol = req.headers['x-forwarded-proto'] || req.protocol;
     const imageUrl = `${protocol}://${host}/uploads/${savedName}`;
 
-    // 2. Определяем провайдера и распознаём
+    // 2. Recognize
     let recognized = null;
     let recognitionMethod = model || 'manual';
     const selectedModel = model || 'gemini-1.5-flash';
 
     try {
       if (selectedModel.startsWith('gemini')) {
-        console.log('🔍 Распознавание через Gemini...');
+        console.log('🔍 Gemini recognition...');
         recognized = await recognizeWithGemini(image, fileType || 'image/jpeg', selectedModel);
         recognitionMethod = selectedModel;
-      } else if (selectedModel.startsWith('llama-3.2-') && selectedModel.includes('vision')) {
-        console.log('🔍 Распознавание через Groq Vision...');
+      } else if (selectedModel.includes('vision')) {
+        console.log('🔍 Groq Vision recognition...');
         recognized = await recognizeWithGroq(image, fileType || 'image/jpeg', selectedModel);
         recognitionMethod = selectedModel;
       } else if (selectedModel.startsWith('ocr') || selectedModel.startsWith('ocrspace')) {
-        console.log('🔍 Распознавание через OCR.space...');
+        console.log('🔍 OCR.space recognition...');
         recognized = await recognizeWithOCRSpace(image, selectedModel);
         recognitionMethod = selectedModel;
       } else {
-        console.log('⚠️ Модель не поддерживает vision, сохраняем без распознавания');
+        console.log('⚠️ Model without vision support, saving without recognition');
       }
     } catch (recErr) {
-      console.error('❌ Ошибка распознавания:', recErr.message);
+      console.error('❌ Recognition error:', recErr.message);
     }
 
-    // 3. Сохраняем в БД
+    // 3. Sanitize and save to DB
     const insertData = {
       image_url: imageUrl,
-      currency: currency || recognized?.currency || 'AED',
+      currency: sanitizeForDB(currency) || sanitizeForDB(recognized?.currency) || 'AED',
       document_type: docType || 'receipt',
       recognition_method: recognitionMethod,
-      store_name: recognized?.store_name || 'Unknown',
-      store_name_ru: recognized?.store_name_ru || '',
-      receipt_date: recognized?.receipt_date || null,
-      receipt_time: recognized?.receipt_time || '',
+      store_name: sanitizeForDB(recognized?.store_name) || 'Unknown',
+      store_name_ru: sanitizeForDB(recognized?.store_name_ru),
+      receipt_date: sanitizeForDB(recognized?.receipt_date),
+      receipt_time: sanitizeForDB(recognized?.receipt_time),
       total_amount: recognized?.total_amount || 0,
-      subtotal: recognized?.subtotal || null,
-      tax_amount: recognized?.tax_amount || null,
-      tax_rate: recognized?.tax_rate || '',
-      items: recognized?.items || [],
-      raw_text: recognized?.raw_text || '',
+      subtotal: sanitizeForDB(recognized?.subtotal),
+      tax_amount: sanitizeForDB(recognized?.tax_amount),
+      tax_rate: sanitizeForDB(recognized?.tax_rate),
+      items: Array.isArray(recognized?.items) ? recognized.items : [],
+      raw_text: sanitizeForDB(recognized?.raw_text) || '',
       created_at: new Date().toISOString()
     };
 
