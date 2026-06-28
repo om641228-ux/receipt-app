@@ -642,6 +642,22 @@ function App() {
                   <p><strong>Дата:</strong> {formatDate(lastSavedReceipt.receipt_date)}</p>
                   <p><strong>Итого:</strong> {formatAmount(lastSavedReceipt.total_amount, lastSavedReceipt.currency)}</p>
                   <p><strong>Товаров:</strong> {lastSavedReceipt.items?.length || 0}</p>
+                  {lastSavedReceipt.items && lastSavedReceipt.items.length > 0 && (
+                    <div className="items-preview">
+                      <h4>Товары:</h4>
+                      <ul>
+                        {lastSavedReceipt.items.map((item, i) => (
+                          <li key={i}>{item.name_ru || item.name} — {item.quantity} × {item.price} = {item.total}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {lastSavedReceipt.raw_text && (
+                    <details>
+                      <summary>Распознанный текст</summary>
+                      <pre style={{fontSize: '11px', maxHeight: '200px', overflow: 'auto'}}>{lastSavedReceipt.raw_text}</pre>
+                    </details>
+                  )}
                 </div>
               </div>
               <button className="close-btn" onClick={() => setLastSavedReceipt(null)}>Закрыть</button>
