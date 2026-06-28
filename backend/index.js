@@ -63,7 +63,7 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 // === РОУТЫ ЧЕКОВ ===
-const receiptRoutes = require('./routes/receipts');
+const receiptRoutes = require('./receipts');
 app.use('/api/receipts', upload.single('image'), receiptRoutes);
 
 // Health check
