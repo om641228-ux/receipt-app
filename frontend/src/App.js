@@ -37,25 +37,9 @@ const FALLBACK_MODELS = [
   { name: 'gemini-robotics-er-1.6-preview', displayName: 'Gemini Robotics ER 1.6 Preview', provider: 'Gemini' },
   { name: 'gemini-1.5-flash', displayName: 'Gemini 1.5 Flash', provider: 'Gemini' },
   { name: 'gemini-1.5-pro', displayName: 'Gemini 1.5 Pro', provider: 'Gemini' },
-  // Groq (все 18)
-  { name: 'groq-allam-2-7b', displayName: 'Groq Allam 2 7B', provider: 'Groq' },
-  { name: 'groq-compound', displayName: 'Groq Compound', provider: 'Groq' },
-  { name: 'groq-compound-mini', displayName: 'Groq Compound Mini', provider: 'Groq' },
-  { name: 'groq-llama-3.1-8b', displayName: 'Groq Llama 3.1 8B Instant', provider: 'Groq' },
-  { name: 'groq-llama-3.3-70b', displayName: 'Groq Llama 3.3 70B Versatile', provider: 'Groq' },
-  { name: 'groq-llama-4-scout', displayName: 'Groq Llama 4 Scout', provider: 'Groq' },
-  { name: 'groq-llama-4-maverick', displayName: 'Groq Llama 4 Maverick', provider: 'Groq' },
-  { name: 'groq-llama-prompt-guard-2-22m', displayName: 'Groq Llama Prompt Guard 2 22M', provider: 'Groq' },
-  { name: 'groq-llama-prompt-guard-2-86m', displayName: 'Groq Llama Prompt Guard 2 86M', provider: 'Groq' },
-  { name: 'groq-gpt-oss-120b', displayName: 'Groq GPT-OSS 120B', provider: 'Groq' },
-  { name: 'groq-gpt-oss-20b', displayName: 'Groq GPT-OSS 20B', provider: 'Groq' },
-  { name: 'groq-gpt-oss-safeguard-20b', displayName: 'Groq GPT-OSS Safeguard 20B', provider: 'Groq' },
-  { name: 'groq-qwen3-32b', displayName: 'Groq Qwen3 32B', provider: 'Groq' },
-  { name: 'groq-qwen3.6-27b', displayName: 'Groq Qwen3.6 27B', provider: 'Groq' },
+  // Groq (только vision-модели — только они поддерживают изображения)
   { name: 'groq-llama-3.2-90b', displayName: 'Groq Llama 3.2 90B Vision', provider: 'Groq' },
   { name: 'groq-llama-3.2-11b', displayName: 'Groq Llama 3.2 11B Vision', provider: 'Groq' },
-  { name: 'groq-mixtral', displayName: 'Groq Mixtral', provider: 'Groq' },
-  { name: 'groq-gemma', displayName: 'Groq Gemma', provider: 'Groq' },
 ];
 
 function App() {

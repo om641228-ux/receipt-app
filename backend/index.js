@@ -131,15 +131,21 @@ async function recognizeWithGroq(base64Image, mimeType, modelId) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error('GROQ_API_KEY не настроен');
 
-  // Все Groq vision-модели + текстовые модели (для fallback)
+  // Только vision-модели Groq поддерживают изображения
   const visionModels = [
     'llama-3.2-11b-vision-preview',
-    'llama-3.2-90b-vision-preview',
-    'meta-llama/llama-4-scout-17b-16e-instruct',
-    'meta-llama/llama-4-maverick-17b-128e-instruct'
+    'llama-3.2-90b-vision-preview'
   ];
-  const model = visionModels.includes(modelId) ? modelId : 'llama-3.2-90b-vision-preview';
+
+  // Если выбрана НЕ vision-модель — ошибка
+  if (!visionModels.includes(modelId)) {
+    throw new Error(`Модель ${modelId} не поддерживает распознавание изображений в Groq. Выберите vision-модель: llama-3.2-90b-vision-preview или llama-3.2-11b-vision-preview`);
+  }
+
+  const model = modelId;
   const dataUrl = `data:${mimeType || 'image/jpeg'};base64,${base64Image}`;
+
+  console.log('🚀 Groq request:', model);
 
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
@@ -157,12 +163,15 @@ async function recognizeWithGroq(base64Image, mimeType, modelId) {
     })
   });
 
-  if (result.IsErroredOnProcessing) {
-    const err = result.ErrorMessage?.[0] || JSON.stringify(result);
+  const result = await response.json();
+
+  if (!response.ok) {
+    const err = result.error?.message || JSON.stringify(result);
     throw new Error(`Groq ${response.status}: ${err}`);
   }
-  const result = response.data;
+
   const text = result.choices?.[0]?.message?.content || '';
+  console.log('📝 Groq response (first 300 chars):', text.substring(0, 300));
 
   try {
     const clean = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
@@ -607,10 +616,11 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
       console.error('❌ Primary recognition failed:', err.message);
       recognitionError = err.message;
 
-      // Fallback на Gemini
-      if (provider !== 'gemini' && process.env.GEMINI_API_KEY) {
+      // Fallback на Gemini ТОЛЬКО если модель не была явно выбрана пользователем
+      // (т.е. если provider === 'unknown' или не указана модель)
+      if (!model && provider !== 'gemini' && process.env.GEMINI_API_KEY) {
         try {
-          console.log('🔄 Fallback to Gemini...');
+          console.log('🔄 Fallback to Gemini (no model selected)...');
           recognized = await recognizeWithGemini(base64Image, 'image/jpeg', 'gemini-3.5-flash');
           recognitionMethod = 'gemini-3.5-flash (fallback)';
           recognitionError = null;
@@ -630,6 +640,11 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
           saved: false
         });
       }
+    }
+
+    // Если была ошибка но распознавание частично прошло — показываем предупреждение
+    if (recognitionError) {
+      console.warn('⚠️ Recognition had errors but returned data:', recognitionError);
     }
 
     // 6. Save to DB

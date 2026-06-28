@@ -127,25 +127,11 @@ module.exports = async (req, res) => {
   }
 };
 app.get('/api/list-groq-models', (req, res) => {
+  // Только vision-модели Groq поддерживают изображения
   const allModels = [
-    { id: 'groq-allam-2-7b', name: 'Groq Allam 2 7B', status: 'ok' },
-    { id: 'groq-compound', name: 'Groq Compound', status: 'ok' },
-    { id: 'groq-compound-mini', name: 'Groq Compound Mini', status: 'ok' },
-    { id: 'groq-llama-3.1-8b', name: 'Groq Llama 3.1 8B Instant', status: 'ok' },
-    { id: 'groq-llama-3.3-70b', name: 'Groq Llama 3.3 70B Versatile', status: 'ok' },
-    { id: 'groq-llama-4-scout', name: 'Groq Llama 4 Scout', status: 'ok' },
-    { id: 'groq-llama-4-maverick', name: 'Groq Llama 4 Maverick', status: 'ok' },
-    { id: 'groq-llama-prompt-guard-2-22m', name: 'Groq Llama Prompt Guard 2 22M', status: 'ok' },
-    { id: 'groq-llama-prompt-guard-2-86m', name: 'Groq Llama Prompt Guard 2 86M', status: 'ok' },
-    { id: 'groq-gpt-oss-120b', name: 'Groq GPT-OSS 120B', status: 'ok' },
-    { id: 'groq-gpt-oss-20b', name: 'Groq GPT-OSS 20B', status: 'ok' },
-    { id: 'groq-gpt-oss-safeguard-20b', name: 'Groq GPT-OSS Safeguard 20B', status: 'ok' },
-    { id: 'groq-qwen3-32b', name: 'Groq Qwen3 32B', status: 'ok' },
-    { id: 'groq-qwen3.6-27b', name: 'Groq Qwen3.6 27B', status: 'ok' },
     { id: 'groq-llama-3.2-90b', name: 'Groq Llama 3.2 90B Vision', status: 'ok' },
     { id: 'groq-llama-3.2-11b', name: 'Groq Llama 3.2 11B Vision', status: 'ok' },
-    { id: 'groq-mixtral', name: 'Groq Mixtral', status: 'ok' },
-    { id: 'groq-gemma', name: 'Groq Gemma', status: 'ok' },
   ];
   res.json({ models: allModels });
+});
 });
