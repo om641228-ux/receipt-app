@@ -6,6 +6,7 @@ const fs = require('fs');
 const multer = require('multer');
 const sharp = require('sharp');
 const FormData = require('form-data');
+const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const ws = require('ws');
