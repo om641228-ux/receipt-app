@@ -4,6 +4,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
+const sharp = require('sharp');
 const { createClient } = require('@supabase/supabase-js');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const ws = require('ws');
@@ -48,14 +49,31 @@ app.use('/uploads', express.static(uploadsDir));
 const authOwners = require('./auth-owners');
 app.use('/api', authOwners);
 
+// ====== IMAGE COMPRESSION ======
+async function compressImage(buffer, maxWidth = 1500, quality = 85) {
+  try {
+    const compressed = await sharp(buffer)
+      .rotate()
+      .resize({ width: maxWidth, height: 4000, fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality, progressive: true })
+      .toBuffer();
+    console.log(`📉 Compressed: ${buffer.length} → ${compressed.length} bytes (${((1 - compressed.length/buffer.length)*100).toFixed(0)}%)`);
+    return compressed;
+  } catch (e) {
+    console.error('⚠️ Compression failed:', e.message);
+    return buffer;
+  }
+}
+
 // ====== RECOGNITION FUNCTIONS ======
 
-// 1. GEMINI через SDK (надёжнее чем fetch)
+// 1. GEMINI через SDK
 async function recognizeWithGemini(base64Image, mimeType, modelId) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY не настроен');
 
-  const modelName = modelId && modelId.startsWith('gemini') ? modelId : 'gemini-1.5-flash';
+  // ИСПРАВЛЕНО: gemini-2.0-flash вместо gemini-1.5-flash (удалена Google)
+  const modelName = modelId && modelId.startsWith('gemini') ? modelId : 'gemini-2.0-flash';
   console.log('🤖 Gemini model:', modelName);
 
   const genAI = new GoogleGenerativeAI(apiKey);
@@ -108,7 +126,7 @@ async function recognizeWithGemini(base64Image, mimeType, modelId) {
   }
 }
 
-// 2. GROQ (Vision) через fetch
+// 2. GROQ (Vision)
 async function recognizeWithGroq(base64Image, mimeType, modelId) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error('GROQ_API_KEY не настроен');
@@ -224,8 +242,8 @@ app.get('/api/list-gemini-models', (req, res) => {
     models: [
       { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
       { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash' },
-      { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash' },
-      { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro' }
+      { id: 'gemini-1.5-flash-002', name: 'Gemini 1.5 Flash 002' },
+      { id: 'gemini-1.5-pro-002', name: 'Gemini 1.5 Pro 002' }
     ]
   });
 });
@@ -276,7 +294,7 @@ function sanitizeForDB(val) {
   return val;
 }
 
-// POST /api/upload-receipt — FormData (multipart)
+// POST /api/upload-receipt
 app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
   console.log('>>> /api/upload-receipt called');
   try {
@@ -288,7 +306,6 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     console.log('📁 File:', file.originalname, 'Size:', file.size, 'Type:', file.mimetype);
 
     const { model, currency, docType } = req.body;
-    const base64Image = file.buffer.toString('base64');
 
     // 1. Save file locally
     const ext = path.extname(file.originalname) || '.jpg';
@@ -313,26 +330,37 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
       console.error('⚠️ Supabase upload:', e.message);
     }
 
-    // 3. Recognize with fallback
+    // 3. Compress image for AI recognition
+    const compressedBuffer = await compressImage(file.buffer, 1500, 85);
+    const base64Image = compressedBuffer.toString('base64');
+    console.log('📐 Base64 length:', base64Image.length);
+
+    // 4. Recognize with fallback
     let recognized = null;
     let recognitionMethod = model || 'manual';
     let recognitionError = null;
 
-    const selectedModel = model || 'gemini-1.5-flash';
+    // ИСПРАВЛЕНО: gemini-2.0-flash по умолчанию
+    const selectedModel = model || 'gemini-2.0-flash';
 
-    // Пробуем основную модель
     try {
       if (selectedModel.startsWith('gemini')) {
         console.log('🔍 Gemini...');
-        recognized = await recognizeWithGemini(base64Image, file.mimetype || 'image/jpeg', selectedModel);
+        recognized = await recognizeWithGemini(base64Image, 'image/jpeg', selectedModel);
         recognitionMethod = selectedModel;
       } else if (selectedModel.includes('vision')) {
         console.log('🔍 Groq...');
-        recognized = await recognizeWithGroq(base64Image, file.mimetype || 'image/jpeg', selectedModel);
+        recognized = await recognizeWithGroq(base64Image, 'image/jpeg', selectedModel);
         recognitionMethod = selectedModel;
       } else if (selectedModel.startsWith('ocr') || selectedModel.startsWith('ocrspace')) {
         console.log('🔍 OCR.space...');
-        recognized = await recognizeWithOCRSpace(base64Image, selectedModel);
+        // Для OCR.space дополнительно сжимаем до < 1 МБ base64
+        let ocrBuffer = compressedBuffer;
+        if (base64Image.length > 1000000) {
+          console.log('📉 Extra compression for OCR.space...');
+          ocrBuffer = await compressImage(file.buffer, 1200, 75);
+        }
+        recognized = await recognizeWithOCRSpace(ocrBuffer.toString('base64'), selectedModel);
         recognitionMethod = selectedModel;
       } else {
         recognitionError = 'Unknown model: ' + selectedModel;
@@ -341,12 +369,12 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
       console.error('❌ Primary recognition failed:', err.message);
       recognitionError = err.message;
 
-      // Fallback на Gemini если основная не Gemini
+      // Fallback на Gemini
       if (!selectedModel.startsWith('gemini') && process.env.GEMINI_API_KEY) {
         try {
           console.log('🔄 Fallback to Gemini...');
-          recognized = await recognizeWithGemini(base64Image, file.mimetype || 'image/jpeg', 'gemini-1.5-flash');
-          recognitionMethod = 'gemini-1.5-flash (fallback)';
+          recognized = await recognizeWithGemini(base64Image, 'image/jpeg', 'gemini-2.0-flash');
+          recognitionMethod = 'gemini-2.0-flash (fallback)';
           recognitionError = null;
         } catch (fallbackErr) {
           console.error('❌ Fallback also failed:', fallbackErr.message);
@@ -355,10 +383,9 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
       }
     }
 
-    // 4. Если распознавание полностью провалилось — возвращаем ошибку
+    // 5. Если распознавание полностью провалилось
     if (!recognized || (recognized.store_name === 'Unknown' && recognized.total_amount === 0 && recognized.items.length === 0)) {
       if (recognitionError) {
-        console.error('❌ No recognition data, returning error');
         return res.status(500).json({
           success: false,
           error: 'Распознавание не удалось: ' + recognitionError,
@@ -367,7 +394,7 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
       }
     }
 
-    // 5. Save to DB
+    // 6. Save to DB
     const insertData = {
       image_url: imageUrl,
       currency: sanitizeForDB(currency) || sanitizeForDB(recognized?.currency) || 'AED',
@@ -400,7 +427,7 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     const response = { success: true, ...receipt };
     if (recognitionError) {
       response.recognition_error = recognitionError;
-      response.warning = 'Распознавание частично не удалось, чек сохранён с базовыми данными.';
+      response.warning = 'Распознавание частично не удалось.';
     }
 
     res.json(response);
