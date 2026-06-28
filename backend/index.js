@@ -86,6 +86,33 @@ function cleanItems(items) {
   });
 }
 
+
+// ====== PARSE ITEMS FROM RAW TEXT (fallback if AI fails) ======
+function parseItemsFromText(text) {
+  if (!text) return [];
+  const items = [];
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // Pattern: "Qty Price Total" on one line, name on previous
+    const match = line.match(/^(\d+)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)$/);
+    if (match && i > 0) {
+      const name = lines[i-1];
+      if (name && !/Total|Tax|Sub|VAT|Rounding|Prepayment/i.test(name)) {
+        items.push({
+          name: name,
+          name_ru: name,
+          quantity: parseInt(match[1]),
+          price: parseFloat(match[2]),
+          total: parseFloat(match[3])
+        });
+      }
+    }
+  }
+  return items;
+}
+
 // 1. GEMINI
 async function recognizeWithGemini(base64Image, mimeType, modelId) {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -102,14 +129,15 @@ async function recognizeWithGemini(base64Image, mimeType, modelId) {
 
   const prompt = `Ты — эксперт по распознаванию чеков. Проанализируй изображение чека и верни результат СТРОГО в формате JSON (без markdown, только чистый JSON).
 
-ВАЖНЫЕ ПРАВИЛА ДЛЯ ТОВАРОВ:
-1. Название товара — это РЕАЛЬНОЕ название продукта (например "WARRE'S WARRIOR 75CL", "GRAHAM'S SIX GRAPE RESERVE 75CL", "Plastic Bag")
-2. НЕ используй "2 EACH", "1 EACH", "1 PCS" как название товара — это количество!
-3. Если название товара написано на отдельной строке от кода/количества — возьми название с той строки
-4. Код товара (например E0260, 12991, CN010) — это НЕ название, пропускай его
-5. "Rounding", "Sub Total", "Tax", "Total" — это НЕ товары, не включай их
+КРИТИЧЕСКИ ВАЖНО:
+1. Верни МАССИВ items — это ОБЯЗАТЕЛЬНОЕ поле. Каждый товар должен быть объектом с полями: name, name_ru, quantity, price, total.
+2. Название товара — это РЕАЛЬНОЕ название продукта (например "WARRE'S WARRIOR 75CL", "GRAHAM'S SIX GRAPE RESERVE 75CL", "Plastic Bag")
+3. НЕ используй "2 EACH", "1 EACH", "1 PCS" как название товара — это количество!
+4. Если название товара написано на отдельной строке от кода/количества — возьми название с той строки
+5. Код товара (например E0260, 12991, CN010) — это НЕ название, пропускай его
+6. "Rounding", "Sub Total", "Tax", "Total" — это НЕ товары, не включай их
 
-Структура JSON:
+Структура JSON (ОБЯЗАТЕЛЬНО верни ВСЕ поля):
 {
   "store_name": "название магазина",
   "store_name_ru": "название на русском",
@@ -126,7 +154,7 @@ async function recognizeWithGemini(base64Image, mimeType, modelId) {
   "raw_text": "полный текст чека"
 }
 
-Если поле не найдено — используй null.`;
+Если поле не найдено — используй null. НО items ДОЛЖЕН быть массивом, даже пустым [].`;
 
   const result = await model.generateContent([
     prompt,
@@ -528,10 +556,10 @@ const MODEL_MAP = {
   'gemini-robotics-er-1.6-preview': 'gemini-robotics-er-1.6-preview',
   'gemini-1.5-flash': 'gemini-1.5-flash',
   'gemini-1.5-pro': 'gemini-1.5-pro',
-  'gemini-2.0-flash': 'gemini-2.0-flash',
-  'gemini-2.0-flash-001': 'gemini-2.0-flash-001',
-  'gemini-2.0-flash-lite': 'gemini-2.0-flash-lite',
-  'gemini-2.0-flash-lite-001': 'gemini-2.0-flash-lite-001',
+  'gemini-3.5-flash': 'gemini-3.5-flash',
+  'gemini-3.5-flash-001': 'gemini-3.5-flash-001',
+  'gemini-3.5-flash-lite': 'gemini-3.5-flash-lite',
+  'gemini-3.5-flash-lite-001': 'gemini-3.5-flash-lite-001',
   'gemini-2.5-flash-preview-tts': 'gemini-2.5-flash-preview-tts',
   'gemini-2.5-pro-preview-tts': 'gemini-2.5-pro-preview-tts',
   'gemma-4-26b-a4b-it': 'gemma-4-26b-a4b-it',
