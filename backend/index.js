@@ -14,7 +14,6 @@ app.use(cors({
   credentials: true
 }));
 
-// Для preflight запросов
 app.options('*', cors());
 
 // Логирование всех запросов
@@ -35,17 +34,36 @@ console.log('GROQ_API_KEY exists:', !!process.env.GROQ_API_KEY);
 console.log('ANTHROPIC_API_KEY exists:', !!process.env.ANTHROPIC_API_KEY);
 console.log('OCRSPACE_API_KEY exists:', !!process.env.OCRSPACE_API_KEY);
 
-// Multer для загрузки файлов (FormData)
+// Multer для загрузки файлов
 const upload = multer({ 
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 } // 10MB
 });
 
-// Роуты
-const authRoutes = require('./routes/auth');
-const receiptRoutes = require('./routes/receipts');
+// === ВСТРОЕННАЯ АВТОРИЗАЦИЯ (без отдельного auth.js) ===
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin';
 
-app.use('/api/auth', authRoutes);
+app.post('/api/auth/login', (req, res) => {
+  console.log('Login attempt:', req.body.username);
+  const { username, password } = req.body;
+  
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username and password required' });
+  }
+
+  if (password === ADMIN_PASSWORD) {
+    res.json({ 
+      success: true, 
+      token: 'demo-token-' + Date.now(),
+      user: { username, role: 'admin' }
+    });
+  } else {
+    res.status(401).json({ error: 'Invalid password' });
+  }
+});
+
+// === РОУТЫ ЧЕКОВ ===
+const receiptRoutes = require('./routes/receipts');
 app.use('/api/receipts', upload.single('image'), receiptRoutes);
 
 // Health check
@@ -53,7 +71,7 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Глобальная обработка ошибок — чтобы бэкенд не падал молча
+// Глобальная обработка ошибок
 app.use((err, req, res, next) => {
   console.error('[GLOBAL ERROR]', err.stack || err.message || err);
   res.status(500).json({ 

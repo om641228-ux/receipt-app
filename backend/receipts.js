@@ -10,7 +10,6 @@ const supabase = createClient(
   process.env.SUPABASE_KEY
 );
 
-// Доступные модели
 const MODELS = {
   'gemini-1.5-flash': { provider: 'gemini', name: 'Gemini 1.5 Flash' },
   'gemini-1.5-pro': { provider: 'gemini', name: 'Gemini 1.5 Pro' },
@@ -25,7 +24,6 @@ const MODELS = {
   'ocrspace': { provider: 'ocrspace', name: 'OCR.space' }
 };
 
-// Получение списка моделей
 router.get('/models', (req, res) => {
   res.json(Object.entries(MODELS).map(([id, info]) => ({
     id,
@@ -34,15 +32,11 @@ router.get('/models', (req, res) => {
   })));
 });
 
-// Распознавание чека
 router.post('/recognize', async (req, res) => {
   try {
     console.log('Recognize request received');
-    console.log('Body keys:', Object.keys(req.body));
     console.log('File exists:', !!req.file);
     console.log('Model:', req.body.model);
-    console.log('Currency:', req.body.currency);
-    console.log('Type:', req.body.type);
 
     if (!req.file) {
       return res.status(400).json({ error: 'No image file provided' });
@@ -74,17 +68,13 @@ router.post('/recognize', async (req, res) => {
       const prompt = `Analyze this ${receiptType} image and extract all items, prices, taxes, and total. Currency: ${currency}. Return JSON with: store_name, date, items[{name, quantity, price, total}], subtotal, tax, total, currency.`;
       
       const imagePart = {
-        inlineData: {
-          data: base64Image,
-          mimeType: mimeType
-        }
+        inlineData: { data: base64Image, mimeType: mimeType }
       };
 
       const geminiResult = await model.generateContent([prompt, imagePart]);
       const response = await geminiResult.response;
       const text = response.text();
       
-      // Пытаемся извлечь JSON из ответа
       try {
         const jsonMatch = text.match(/\{[\s\S]*\}/);
         result = jsonMatch ? JSON.parse(jsonMatch[0]) : { raw_text: text };
@@ -107,23 +97,13 @@ router.post('/recognize', async (req, res) => {
         },
         body: JSON.stringify({
           model: modelId,
-          messages: [
-            {
-              role: 'user',
-              content: [
-                {
-                  type: 'text',
-                  text: `Analyze this ${receiptType} image. Extract: store_name, date, items (name, quantity, price, total), subtotal, tax, total. Currency: ${currency}. Return ONLY valid JSON.`
-                },
-                {
-                  type: 'image_url',
-                  image_url: {
-                    url: `data:${mimeType};base64,${base64Image}`
-                  }
-                }
-              ]
-            }
-          ],
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'text', text: `Analyze this ${receiptType}. Extract JSON: store_name, date, items, subtotal, tax, total. Currency: ${currency}.` },
+              { type: 'image_url', image_url: { url: `data:${mimeType};base64,${base64Image}` } }
+            ]
+          }],
           max_tokens: 4096,
           temperature: 0.1
         })
@@ -161,25 +141,13 @@ router.post('/recognize', async (req, res) => {
         body: JSON.stringify({
           model: modelId,
           max_tokens: 4096,
-          messages: [
-            {
-              role: 'user',
-              content: [
-                {
-                  type: 'image',
-                  source: {
-                    type: 'base64',
-                    media_type: mimeType,
-                    data: base64Image
-                  }
-                },
-                {
-                  type: 'text',
-                  text: `Analyze this ${receiptType}. Extract JSON with: store_name, date, items[{name, quantity, price, total}], subtotal, tax, total. Currency: ${currency}.`
-                }
-              ]
-            }
-          ]
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64Image } },
+              { type: 'text', text: `Analyze this ${receiptType}. Extract JSON: store_name, date, items, subtotal, tax, total. Currency: ${currency}.` }
+            ]
+          }]
         })
       });
 
@@ -233,7 +201,6 @@ router.post('/recognize', async (req, res) => {
       return res.status(500).json({ error: 'Recognition failed - no result' });
     }
 
-    // Добавляем метаданные
     result._meta = {
       model: modelId,
       provider: modelInfo.provider,
@@ -246,16 +213,14 @@ router.post('/recognize', async (req, res) => {
     res.json(result);
 
   } catch (error) {
-    console.error('RECOGNIZE ERROR:', error.message, error.stack);
+    console.error('RECOGNIZE ERROR:', error.message);
     res.status(500).json({ 
       error: 'Recognition failed', 
-      message: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      message: error.message
     });
   }
 });
 
-// Сохранение чека в Supabase
 router.post('/save', async (req, res) => {
   try {
     const receipt = req.body;
@@ -267,7 +232,6 @@ router.post('/save', async (req, res) => {
       .select();
 
     if (error) throw error;
-
     res.json({ success: true, data });
   } catch (error) {
     console.error('SAVE ERROR:', error);
@@ -275,7 +239,6 @@ router.post('/save', async (req, res) => {
   }
 });
 
-// Получение чеков
 router.get('/list', async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -284,7 +247,6 @@ router.get('/list', async (req, res) => {
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-
     res.json(data || []);
   } catch (error) {
     console.error('LIST ERROR:', error);
