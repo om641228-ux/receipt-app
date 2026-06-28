@@ -146,3 +146,29 @@ module.exports = async (req, res) => {
     });
   }
 };
+app.get('/api/list-gemini-models', (req, res) => {
+  // Все Gemini модели со скриншотов (доступные + недоступные для info)
+  const allModels = [
+    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', status: 'ok' },
+    { id: 'gemini-2.5-flash-image', name: 'Gemini 2.5 Flash Image', status: 'ok' },
+    { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite', status: 'ok' },
+    { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', status: 'ok' },
+    { id: 'gemini-3-flash-preview', name: 'Gemini 3 Flash Preview', status: 'ok' },
+    { id: 'gemini-3-pro-image', name: 'Gemini 3 Pro Image', status: 'ok' },
+    { id: 'gemini-3-pro-image-preview', name: 'Gemini 3 Pro Image Preview', status: 'ok' },
+    { id: 'gemini-3.1-flash-image', name: 'Gemini 3.1 Flash Image', status: 'ok' },
+    { id: 'gemini-3.1-flash-image-preview', name: 'Gemini 3.1 Flash Image Preview', status: 'ok' },
+    { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', status: 'ok' },
+    { id: 'gemini-3.1-flash-lite-preview', name: 'Gemini 3.1 Flash Lite Preview', status: 'ok' },
+    { id: 'gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro Preview', status: 'ok' },
+    { id: 'gemini-3.1-pro-preview-customtools', name: 'Gemini 3.1 Pro Preview CustomTools', status: 'ok' },
+    { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', status: 'ok' },
+    { id: 'gemini-flash-latest', name: 'Gemini Flash Latest', status: 'ok' },
+    { id: 'gemini-flash-lite-latest', name: 'Gemini Flash Lite Latest', status: 'ok' },
+    { id: 'gemini-pro-latest', name: 'Gemini Pro Latest', status: 'ok' },
+    { id: 'gemini-robotics-er-1.6-preview', name: 'Gemini Robotics ER 1.6 Preview', status: 'ok' },
+    { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', status: 'ok' },
+    { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', status: 'ok' },
+  ];
+  res.json({ models: allModels });
+});

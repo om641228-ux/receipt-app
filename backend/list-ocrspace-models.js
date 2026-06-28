@@ -139,3 +139,12 @@ module.exports = async (req, res) => {
     });
   }
 };
+app.get('/api/list-ocrspace-models', (req, res) => {
+  const allModels = [
+    { id: 'ocrspace-engine2', name: 'OCR.space Engine 2', status: 'ok' },
+    { id: 'ocrspace-engine5', name: 'OCR.space Engine 5', status: 'ok' },
+    { id: 'ocr-engine-1', name: 'OCR Engine 1', status: 'ok' },
+    { id: 'ocr-engine-2', name: 'OCR Engine 2', status: 'ok' },
+  ];
+  res.json({ models: allModels });
+});

@@ -473,23 +473,47 @@ function sanitizeForDB(val) {
 
 // ====== MODEL MAPPING (frontend names -> backend names) ======
 const MODEL_MAP = {
-  // Gemini
-  'gemini-3.5-flash': 'gemini-3.5-flash',
+  // === GEMINI (все 33 модели со скриншотов) ===
   'gemini-2.5-flash': 'gemini-2.5-flash',
+  'gemini-2.5-flash-image': 'gemini-2.5-flash-image',
+  'gemini-2.5-flash-lite': 'gemini-2.5-flash-lite',
   'gemini-2.5-pro': 'gemini-2.5-pro',
+  'gemini-3-flash-preview': 'gemini-3-flash-preview',
+  'gemini-3-pro-image': 'gemini-3-pro-image',
+  'gemini-3-pro-image-preview': 'gemini-3-pro-image-preview',
+  'gemini-3.1-flash-image': 'gemini-3.1-flash-image',
+  'gemini-3.1-flash-image-preview': 'gemini-3.1-flash-image-preview',
+  'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite',
+  'gemini-3.1-flash-lite-preview': 'gemini-3.1-flash-lite-preview',
+  'gemini-3.1-pro-preview': 'gemini-3.1-pro-preview',
+  'gemini-3.1-pro-preview-customtools': 'gemini-3.1-pro-preview-customtools',
+  'gemini-3.5-flash': 'gemini-3.5-flash',
+  'gemini-flash-latest': 'gemini-flash-latest',
+  'gemini-flash-lite-latest': 'gemini-flash-lite-latest',
+  'gemini-pro-latest': 'gemini-pro-latest',
+  'gemini-robotics-er-1.6-preview': 'gemini-robotics-er-1.6-preview',
   'gemini-1.5-flash': 'gemini-1.5-flash-002',
   'gemini-1.5-pro': 'gemini-1.5-pro-002',
-  'gemini-3.1-pro': 'gemini-3.1-pro-preview',
-  'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite',
-  // Groq
-  'groq-llama-3.2-90b': 'llama-3.2-90b-vision-preview',
-  'groq-llama-3.2-11b': 'llama-3.2-11b-vision-preview',
+  // === GROQ (все модели со скриншотов) ===
+  'groq-allam-2-7b': 'allam-2-7b',
+  'groq-compound': 'groq/compound',
+  'groq-compound-mini': 'groq/compound-mini',
+  'groq-llama-3.1-8b': 'llama-3.1-8b-instant',
   'groq-llama-3.3-70b': 'llama-3.3-70b-versatile',
   'groq-llama-4-scout': 'meta-llama/llama-4-scout-17b-16e-instruct',
   'groq-llama-4-maverick': 'meta-llama/llama-4-maverick-17b-128e-instruct',
+  'groq-llama-prompt-guard-2-22m': 'meta-llama/llama-prompt-guard-2-22m',
+  'groq-llama-prompt-guard-2-86m': 'meta-llama/llama-prompt-guard-2-86m',
+  'groq-gpt-oss-120b': 'openai/gpt-oss-120b',
+  'groq-gpt-oss-20b': 'openai/gpt-oss-20b',
+  'groq-gpt-oss-safeguard-20b': 'openai/gpt-oss-safeguard-20b',
+  'groq-qwen3-32b': 'qwen/qwen3-32b',
+  'groq-qwen3.6-27b': 'qwen/qwen3.6-27b',
+  'groq-llama-3.2-90b': 'llama-3.2-90b-vision-preview',
+  'groq-llama-3.2-11b': 'llama-3.2-11b-vision-preview',
   'groq-mixtral': 'mixtral-8x7b-32768',
   'groq-gemma': 'gemma2-9b-it',
-  // OCR.space
+  // === OCR.SPACE ===
   'ocrspace-engine2': 'ocrspace-engine2',
   'ocrspace-engine5': 'ocrspace-engine5',
   'ocr-engine-1': 'ocr-engine-1',
@@ -503,7 +527,7 @@ function resolveModel(modelName) {
 function getProvider(modelName) {
   const m = modelName.toLowerCase();
   if (m.startsWith('gemini')) return 'gemini';
-  if (m.includes('llama') || m.includes('groq') || m.includes('qwen') || m.includes('allam') || m.includes('openai') || m.includes('mixtral') || m.includes('gemma')) return 'groq';
+  if (m.includes('llama') || m.includes('groq') || m.includes('qwen') || m.includes('allam') || m.includes('openai') || m.includes('mixtral') || m.includes('gemma') || m.includes('prompt-guard')) return 'groq';
   if (m.startsWith('ocr') || m.startsWith('ocrspace')) return 'ocrspace';
   return 'unknown';
 }
