@@ -648,6 +648,15 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     }
 
     // 6. Save to DB
+    const itemsToSave = Array.isArray(recognized?.items) ? recognized.items : [];
+    const rawTextToSave = recognized?.raw_text || '';
+
+    console.log('💾 Saving to DB:', {
+      store: recognized?.store_name,
+      items_count: itemsToSave.length,
+      raw_text_length: rawTextToSave.length
+    });
+
     const insertData = {
       image_url: imageUrl,
       currency: sanitizeForDB(currency) || sanitizeForDB(recognized?.currency) || 'AED',
@@ -661,8 +670,8 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
       subtotal: sanitizeForDB(recognized?.subtotal),
       tax_amount: sanitizeForDB(recognized?.tax_amount),
       tax_rate: sanitizeForDB(recognized?.tax_rate),
-      items: Array.isArray(recognized?.items) ? recognized.items : [],
-      raw_text: sanitizeForDB(recognized?.raw_text) || '',
+      items: itemsToSave,  // массив объектов — Supabase JSONB
+      raw_text: rawTextToSave,  // текст — не используем sanitize чтобы не потерять данные
       created_at: new Date().toISOString()
     };
 

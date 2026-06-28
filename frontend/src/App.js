@@ -124,10 +124,21 @@ function App() {
       const data = await res.json();
       const raw = Array.isArray(data) ? data : (data.receipts || []);
       // Фикс Mixed Content для всех image_url
-      const processed = raw.map(r => ({
-        ...r,
-        image_url: fixImageUrl(r.image_url)
-      }));
+      const processed = raw.map(r => {
+        // Парсим items если пришло как строка (JSON)
+        let items = r.items;
+        if (typeof items === 'string') {
+          try { items = JSON.parse(items); } catch (e) { items = []; }
+        }
+        if (!Array.isArray(items)) items = [];
+
+        return {
+          ...r,
+          image_url: fixImageUrl(r.image_url),
+          items: items,
+          raw_text: r.raw_text || ''
+        };
+      });
       setReceipts(processed);
     } catch (e) {
       console.error('Ошибка загрузки:', e);
