@@ -131,8 +131,14 @@ async function recognizeWithGroq(base64Image, mimeType, modelId) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error('GROQ_API_KEY не настроен');
 
-  const visionModels = ['llama-3.2-11b-vision-preview', 'llama-3.2-90b-vision-preview'];
-  const model = visionModels.includes(modelId) ? modelId : 'llama-3.2-11b-vision-preview';
+  // Все Groq vision-модели + текстовые модели (для fallback)
+  const visionModels = [
+    'llama-3.2-11b-vision-preview',
+    'llama-3.2-90b-vision-preview',
+    'meta-llama/llama-4-scout-17b-16e-instruct',
+    'meta-llama/llama-4-maverick-17b-128e-instruct'
+  ];
+  const model = visionModels.includes(modelId) ? modelId : 'llama-3.2-90b-vision-preview';
   const dataUrl = `data:${mimeType || 'image/jpeg'};base64,${base64Image}`;
 
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -465,6 +471,43 @@ function sanitizeForDB(val) {
   return val;
 }
 
+// ====== MODEL MAPPING (frontend names -> backend names) ======
+const MODEL_MAP = {
+  // Gemini
+  'gemini-3.5-flash': 'gemini-3.5-flash',
+  'gemini-2.5-flash': 'gemini-2.5-flash',
+  'gemini-2.5-pro': 'gemini-2.5-pro',
+  'gemini-1.5-flash': 'gemini-1.5-flash-002',
+  'gemini-1.5-pro': 'gemini-1.5-pro-002',
+  'gemini-3.1-pro': 'gemini-3.1-pro-preview',
+  'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite',
+  // Groq
+  'groq-llama-3.2-90b': 'llama-3.2-90b-vision-preview',
+  'groq-llama-3.2-11b': 'llama-3.2-11b-vision-preview',
+  'groq-llama-3.3-70b': 'llama-3.3-70b-versatile',
+  'groq-llama-4-scout': 'meta-llama/llama-4-scout-17b-16e-instruct',
+  'groq-llama-4-maverick': 'meta-llama/llama-4-maverick-17b-128e-instruct',
+  'groq-mixtral': 'mixtral-8x7b-32768',
+  'groq-gemma': 'gemma2-9b-it',
+  // OCR.space
+  'ocrspace-engine2': 'ocrspace-engine2',
+  'ocrspace-engine5': 'ocrspace-engine5',
+  'ocr-engine-1': 'ocr-engine-1',
+  'ocr-engine-2': 'ocr-engine-2'
+};
+
+function resolveModel(modelName) {
+  return MODEL_MAP[modelName] || modelName || 'gemini-3.5-flash';
+}
+
+function getProvider(modelName) {
+  const m = modelName.toLowerCase();
+  if (m.startsWith('gemini')) return 'gemini';
+  if (m.includes('llama') || m.includes('groq') || m.includes('qwen') || m.includes('allam') || m.includes('openai') || m.includes('mixtral') || m.includes('gemma')) return 'groq';
+  if (m.startsWith('ocr') || m.startsWith('ocrspace')) return 'ocrspace';
+  return 'unknown';
+}
+
 // POST /api/upload-receipt
 app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
   console.log('>>> /api/upload-receipt called');
@@ -477,6 +520,8 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     console.log('📁 File:', file.originalname, 'Size:', file.size, 'Type:', file.mimetype);
 
     const { model, currency, docType } = req.body;
+    console.log('📌 Model from frontend:', model);
+    console.log('💰 Currency:', currency, '| DocType:', docType);
 
     // 1. Save file locally
     const ext = path.extname(file.originalname) || '.jpg';
@@ -506,35 +551,40 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     const base64Image = compressedBuffer.toString('base64');
     console.log('📐 Base64 length:', base64Image.length);
 
-    // 4. Recognize with fallback
+    // 4. Recognize with correct provider
     let recognized = null;
     let recognitionMethod = model || 'manual';
     let recognitionError = null;
 
-    const selectedModel = model || 'gemini-3.5-flash';
+    const frontendModel = model || 'gemini-3.5-flash';
+    const backendModel = resolveModel(frontendModel);
+    const provider = getProvider(backendModel);
+
+    console.log('🎯 Resolved:', frontendModel, '->', backendModel, '| Provider:', provider);
 
     try {
-      if (selectedModel.startsWith('gemini')) {
+      if (provider === 'gemini') {
         console.log('🔍 Gemini...');
-        recognized = await recognizeWithGemini(base64Image, 'image/jpeg', selectedModel);
-        recognitionMethod = selectedModel;
-      } else if (selectedModel.includes('vision')) {
+        recognized = await recognizeWithGemini(base64Image, 'image/jpeg', backendModel);
+        recognitionMethod = backendModel;
+      } else if (provider === 'groq') {
         console.log('🔍 Groq...');
-        recognized = await recognizeWithGroq(base64Image, 'image/jpeg', selectedModel);
-        recognitionMethod = selectedModel;
-      } else if (selectedModel.startsWith('ocr') || selectedModel.startsWith('ocrspace')) {
+        recognized = await recognizeWithGroq(base64Image, 'image/jpeg', backendModel);
+        recognitionMethod = backendModel;
+      } else if (provider === 'ocrspace') {
         console.log('🔍 OCR.space...');
-        recognized = await recognizeWithOCRSpace(compressedBuffer, selectedModel);
-        recognitionMethod = selectedModel;
+        recognized = await recognizeWithOCRSpace(compressedBuffer, backendModel);
+        recognitionMethod = backendModel;
       } else {
-        recognitionError = 'Unknown model: ' + selectedModel;
+        recognitionError = 'Unknown model: ' + frontendModel + ' (resolved: ' + backendModel + ')';
+        console.error('❌', recognitionError);
       }
     } catch (err) {
       console.error('❌ Primary recognition failed:', err.message);
       recognitionError = err.message;
 
       // Fallback на Gemini
-      if (!selectedModel.startsWith('gemini') && process.env.GEMINI_API_KEY) {
+      if (provider !== 'gemini' && process.env.GEMINI_API_KEY) {
         try {
           console.log('🔄 Fallback to Gemini...');
           recognized = await recognizeWithGemini(base64Image, 'image/jpeg', 'gemini-3.5-flash');
