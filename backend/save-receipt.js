@@ -33,9 +33,7 @@ module.exports = async (req, res) => {
   
   try {
     const { receipt, image, docType, recognitionMethod, recognizedAt, object } = req.body;
-    console.log('=== SAVE RECEIPT ===');
-    console.log('Store:', receipt?.store_name);
-    console.log('Has image:', !!image);
+    console.log('Saving document:', { store: receipt.store_name, type: docType || 'receipt', object: object || null });
 
     let imageUrl = null;
 
@@ -45,72 +43,34 @@ module.exports = async (req, res) => {
         const buffer = Buffer.from(base64Data, 'base64');
         const filename = `receipt-${Date.now()}-${Math.random().toString(36).substring(7)}.jpg`;
         
-        console.log('Buffer size:', buffer.length, 'bytes');
-        
-        // 1. Сохраняем локально (backup)
         const uploadsDir = path.join(__dirname, '../uploads');
         if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-        const localPath = path.join(uploadsDir, filename);
-        fs.writeFileSync(localPath, buffer);
-        console.log('✅ Saved locally:', localPath);
-        
-        // 2. Пробуем загрузить в Supabase Storage (приоритет)
-        try {
-          console.log('Uploading to Supabase Storage...');
-          const { data: uploadData, error: uploadError } = await supabase
-            .storage
-            .from('receipts')
-            .upload(filename, buffer, { 
-              contentType: 'image/jpeg', 
-              upsert: false 
-            });
+        fs.writeFileSync(path.join(uploadsDir, filename), buffer);
 
-          if (uploadError) {
-            console.error('❌ Supabase upload error:', uploadError);
-            // Fallback на локальный URL с полным путем
-            const backendUrl = process.env.BACKEND_URL || `https://${req.headers.host}`;
-            imageUrl = `${backendUrl}/uploads/${filename}`;
-            console.log('Using local URL:', imageUrl);
-          } else {
-            console.log('✅ Supabase upload success');
-            
-            // Получаем публичный URL
-            const { data: urlData } = supabase
-              .storage
-              .from('receipts')
-              .getPublicUrl(filename);
-            
-            if (urlData && urlData.publicUrl) {
-              imageUrl = urlData.publicUrl;
-              console.log('✅ Supabase Public URL:', imageUrl);
-            } else {
-              console.error('❌ No public URL returned');
-              const backendUrl = process.env.BACKEND_URL || `https://${req.headers.host}`;
-              imageUrl = `${backendUrl}/uploads/${filename}`;
-            }
-          }
-        } catch (supabaseErr) {
-          console.error('❌ Supabase error:', supabaseErr.message);
-          const backendUrl = process.env.BACKEND_URL || `https://${req.headers.host}`;
-          imageUrl = `${backendUrl}/uploads/${filename}`;
+        const { data: uploadData, error: uploadError } = await supabase
+          .storage.from('receipts').upload(filename, buffer, { contentType: 'image/jpeg', upsert: false });
+
+        if (uploadError) {
+          console.error('❌ Supabase upload error:', uploadError);
+        } else {
+          const { data: { publicUrl } } = supabase.storage.from('receipts').getPublicUrl(filename);
+          imageUrl = publicUrl;
+          console.log('✅ Supabase URL:', publicUrl);
         }
-        
       } catch (imgErr) {
-        console.error('❌ Image processing error:', imgErr);
+        console.error('❌ Error saving image:', imgErr);
       }
     }
 
     const formattedDate = parseDate(receipt.date);
     const formattedTime = parseTime(receipt.time);
-    
+    // ДАТА РАСПОЗНАВАНИЯ: берём с устройства (если прислал фронт и значение валидно), иначе серверное время
     let recognizedAtFinal = new Date().toISOString();
     if (recognizedAt && !isNaN(new Date(recognizedAt).getTime())) {
       recognizedAtFinal = new Date(recognizedAt).toISOString();
     }
-    
+    // МЕТОД/МОДЕЛЬ РАСПОЗНАВАНИЯ: из фронта (например "Groq: meta-llama/...") или из самого чека
     const recognitionMethodFinal = recognitionMethod || receipt.recognition_method || null;
-
-    console.log('Saving with image_url:', imageUrl);
 
     const { data, error } = await supabase
       .from('receipts')
@@ -132,22 +92,19 @@ module.exports = async (req, res) => {
         image_url: imageUrl,
         raw_text: receipt.raw_text || null,
         document_type: docType || 'receipt',
-        recognized_at: recognizedAtFinal,
-        recognition_method: recognitionMethodFinal,
-        object: object || null,
-        owner_id: req.user?.id || req.userId || null,
-        owner_name: req.user?.name || req.userName || null
+        recognized_at: recognizedAtFinal, // дата распознавания
+        recognition_method: recognitionMethodFinal, // провайдер + модель
+        object: object || null, // ОБЪЕКТ (проект)
+        owner_id: req.userId || null, // КТО ДОБАВИЛ (id) — из авторизации
+        owner_name: req.userName || null // КТО ДОБАВИЛ (имя) — для вывода в карточке
       }])
-      .select()
-      .single();
+      .select().single();
 
     if (error) throw error;
 
-    console.log('✅ Saved to DB. ID:', data.id, 'image_url:', data.image_url);
-
     res.json({ success: true, data });
   } catch (err) {
-    console.error('❌ Save Error:', err);
+    console.error('Save Error:', err);
     res.status(500).json({ success: false, error: err.message });
   }
 };
