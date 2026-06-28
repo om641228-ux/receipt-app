@@ -92,14 +92,34 @@ function parseItemsFromText(text) {
   if (!text) return [];
   const items = [];
   const lines = text.split('\n').map(l => l.trim()).filter(l => l);
+  const usedNames = new Set();
 
+  function isCode(str) {
+    return /^E\d+$/.test(str) || /^CN\d+$/.test(str) || /^\d{5,}$/.test(str);
+  }
+  function isSkip(str) {
+    return /^EACH$/i.test(str) || /^PCS$/i.test(str) || /^\d+$/.test(str) ||
+           /Total|Tax|Sub|VAT|Rounding|Prepayment|Amount|DUE|RATE|Manager|Driver|Order|Phone|Address|Name|Date|Time|Receipt|Terminal|Cashier|Account|Customer|Payment|Card|Scan|Thank|Products|return|exchange|sealed|unopened|packaging|personalized|comment|NO\s*CUTLERY|ALL\s*AMOUNTS/i.test(str);
+  }
+  function findName(startIdx) {
+    for (let j = startIdx; j >= Math.max(0, startIdx - 6); j--) {
+      const candidate = lines[j];
+      if (isCode(candidate)) continue;
+      if (isSkip(candidate)) continue;
+      if (candidate.length < 3) continue;
+      if (/^\d/.test(candidate)) continue; // starts with number
+      return candidate;
+    }
+    return null;
+  }
+
+  // Pattern 1: "Qty Price Total" (3 numbers on one line)
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    // Pattern: "Qty Price Total" on one line, name on previous
-    const match = line.match(/^(\d+)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)$/);
+    const match = lines[i].match(/^(\d+)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)$/);
     if (match && i > 0) {
-      const name = lines[i-1];
-      if (name && !/Total|Tax|Sub|VAT|Rounding|Prepayment/i.test(name)) {
+      const name = findName(i - 1);
+      if (name && !usedNames.has(name)) {
+        usedNames.add(name);
         items.push({
           name: name,
           name_ru: name,
@@ -110,6 +130,38 @@ function parseItemsFromText(text) {
       }
     }
   }
+
+  // Pattern 2: standalone price line (like "79.12", "104.76")
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\d+\.\d{2}$/.test(lines[i]) && !items.find(it => Math.abs(it.price - parseFloat(lines[i])) < 0.01)) {
+      const price = parseFloat(lines[i]);
+      let qty = 1;
+      let name = null;
+
+      for (let j = i - 1; j >= Math.max(0, i - 6); j--) {
+        const candidate = lines[j];
+        if (isCode(candidate)) continue;
+        if (/^\d+$/.test(candidate)) { qty = parseInt(candidate); continue; }
+        if (isSkip(candidate)) continue;
+        if (candidate.length > 2 && !/^\d/.test(candidate)) {
+          name = candidate;
+          break;
+        }
+      }
+
+      if (name && !usedNames.has(name)) {
+        usedNames.add(name);
+        items.push({
+          name: name,
+          name_ru: name,
+          quantity: qty,
+          price: price,
+          total: price * qty
+        });
+      }
+    }
+  }
+
   return items;
 }
 
