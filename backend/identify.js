@@ -13,7 +13,7 @@ module.exports = async (req, res) => {
 
     const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
     const aiModel = genAI.getGenerativeModel({ 
-      model: model || 'gemini-2.0-flash',
+      model: model || 'gemini-3.5-flash',
       generationConfig: { 
         temperature: 0.1, 
         maxOutputTokens: 4000 

@@ -73,7 +73,7 @@ async function recognizeWithGemini(base64Image, mimeType, modelId) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY не настроен');
 
-  const modelName = modelId && modelId.startsWith('gemini') ? modelId : 'gemini-2.0-flash';
+  const modelName = modelId && modelId.startsWith('gemini') ? modelId : 'gemini-3.5-flash';
   console.log('🤖 Gemini model:', modelName);
 
   const genAI = new GoogleGenerativeAI(apiKey);
@@ -151,11 +151,11 @@ async function recognizeWithGroq(base64Image, mimeType, modelId) {
     })
   });
 
-  if (!response.ok) {
-    const err = await response.text();
+  if (result.IsErroredOnProcessing) {
+    const err = result.ErrorMessage?.[0] || JSON.stringify(result);
     throw new Error(`Groq ${response.status}: ${err}`);
   }
-  const result = await response.json();
+  const result = response.data;
   const text = result.choices?.[0]?.message?.content || '';
 
   try {
@@ -209,18 +209,19 @@ async function recognizeWithOCRSpace(buffer, modelId) {
   formData.append('OCREngine', engine);
   formData.append('scale', 'true');
 
-  const response = await fetch('https://api.ocr.space/parse/image', {
-    method: 'POST',
-    headers: formData.getHeaders(),
-    body: formData
+  const response = await axios.post('https://api.ocr.space/parse/image', formData, {
+    headers: { ...formData.getHeaders() },
+    maxContentLength: Infinity,
+    maxBodyLength: Infinity,
+    timeout: 30000
   });
 
-  if (!response.ok) {
-    const err = await response.text();
+  if (result.IsErroredOnProcessing) {
+    const err = result.ErrorMessage?.[0] || JSON.stringify(result);
     throw new Error(`OCR.space ${response.status}: ${err}`);
   }
   
-  const result = await response.json();
+  const result = response.data;
   
   if (result.IsErroredOnProcessing) {
     throw new Error(`OCR.space error: ${result.ErrorMessage?.[0] || JSON.stringify(result)}`);
@@ -411,7 +412,7 @@ app.get('/api/list-gemini-models', (req, res) => {
   res.json({
     models: [
       { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
-      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash' },
+      { id: 'gemini-3.5-flash', name: 'Gemini 2.0 Flash' },
       { id: 'gemini-1.5-flash-002', name: 'Gemini 1.5 Flash 002' },
       { id: 'gemini-1.5-pro-002', name: 'Gemini 1.5 Pro 002' }
     ]
@@ -510,7 +511,7 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     let recognitionMethod = model || 'manual';
     let recognitionError = null;
 
-    const selectedModel = model || 'gemini-2.0-flash';
+    const selectedModel = model || 'gemini-3.5-flash';
 
     try {
       if (selectedModel.startsWith('gemini')) {
@@ -536,8 +537,8 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
       if (!selectedModel.startsWith('gemini') && process.env.GEMINI_API_KEY) {
         try {
           console.log('🔄 Fallback to Gemini...');
-          recognized = await recognizeWithGemini(base64Image, 'image/jpeg', 'gemini-2.0-flash');
-          recognitionMethod = 'gemini-2.0-flash (fallback)';
+          recognized = await recognizeWithGemini(base64Image, 'image/jpeg', 'gemini-3.5-flash');
+          recognitionMethod = 'gemini-3.5-flash (fallback)';
           recognitionError = null;
         } catch (fallbackErr) {
           console.error('❌ Fallback also failed:', fallbackErr.message);

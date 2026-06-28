@@ -81,7 +81,7 @@ module.exports = async (req, res) => {
     }
 
     const files = req.files;
-    const model = req.body && req.body.model ? req.body.model : 'gemini-2.0-flash';
+    const model = req.body && req.body.model ? req.body.model : 'gemini-3.5-flash';
 
     console.log('Received files:', files ? files.length : 0);
     console.log('Model:', model);

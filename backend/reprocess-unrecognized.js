@@ -224,7 +224,7 @@ RULES:
       if (!apiKey) throw new Error('GEMINI_API_KEY не установлен');
 
       const genAI = new GoogleGenerativeAI(apiKey);
-      const aiModel = genAI.getGenerativeModel({ model: model || 'gemini-2.0-flash' });
+      const aiModel = genAI.getGenerativeModel({ model: model || 'gemini-3.5-flash' });
 
       const prompt = `Extract ALL info from receipt. Return JSON:
 {"store_name":"","store_name_ru":"","date":"","time":"","total":0,"subtotal":0,"tax":0,"tax_rate":"","currency":"${currency}","items":[{"name":"","name_ru":"","quantity":1,"price":0,"total":0}],"payment_method":"","payment_amount":0}

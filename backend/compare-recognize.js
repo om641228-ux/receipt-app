@@ -168,7 +168,7 @@ async function recognizeWithGemini(base64Data, prompt, currency) {
   if (!apiKey) throw new Error('GEMINI_API_KEY не установлен');
 
   const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-3.5-flash' });
 
   const result = await model.generateContent([
     prompt,

@@ -365,7 +365,7 @@ RULES:
     try {
       console.log('   🤖 Используем Gemini...');
       const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-      const aiModel = genAI.getGenerativeModel({ model: model || 'gemini-2.0-flash' });
+      const aiModel = genAI.getGenerativeModel({ model: model || 'gemini-3.5-flash' });
       
       const result = await aiModel.generateContent(prompt);
       let aiText = result.response.text();

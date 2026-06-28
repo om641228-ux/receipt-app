@@ -9,11 +9,24 @@ const fixImageUrl = (url) => {
   return url.replace(/^http:\/\//, 'https://');
 };
 
+// Fallback-модели (если бэкенд не отвечает)
+const FALLBACK_MODELS = [
+  { name: 'ocrspace-engine2', displayName: 'OCR.space Engine 2', provider: 'OCR.space' },
+  { name: 'ocrspace-engine5', displayName: 'OCR.space Engine 5', provider: 'OCR.space' },
+  { name: 'gemini-3.5-flash', displayName: 'Gemini 3.5 Flash', provider: 'Gemini' },
+  { name: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash', provider: 'Gemini' },
+  { name: 'gemini-1.5-flash', displayName: 'Gemini 1.5 Flash', provider: 'Gemini' },
+  { name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', provider: 'Gemini' },
+  { name: 'groq-llama-3.2-90b', displayName: 'Groq Llama 3.2 90B Vision', provider: 'Groq' },
+  { name: 'groq-llama-3.2-11b', displayName: 'Groq Llama 3.2 11B Vision', provider: 'Groq' },
+];
+
 function App() {
   const [token, setToken] = useState(localStorage.getItem('token') || null);
   const [user, setUser] = useState(null);
   const [receipts, setReceipts] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [authChecking, setAuthChecking] = useState(true); // ← НОВОЕ: блокируем мигание
   const [activeTab, setActiveTab] = useState('upload');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -24,12 +37,12 @@ function App() {
   const [previewUrl, setPreviewUrl] = useState(null);
   const [recognizing, setRecognizing] = useState(false);
   const [lastSavedReceipt, setLastSavedReceipt] = useState(null);
-  const [selectedModel, setSelectedModel] = useState('gemini-1.5-flash');
+  const [selectedModel, setSelectedModel] = useState('gemini-3.5-flash'); // ← Рабочая модель по умолчанию
   const [currency, setCurrency] = useState('AED');
   const [docType, setDocType] = useState('receipt');
   const [showModelSelector, setShowModelSelector] = useState(false);
 
-  const [models, setModels] = useState([]);
+  const [models, setModels] = useState(FALLBACK_MODELS); // ← Fallback сразу
   const [modelsLoading, setModelsLoading] = useState(false);
 
   const [filterType, setFilterType] = useState('all');
@@ -46,6 +59,7 @@ function App() {
 
   // === LOGIN ===
   const login = async () => {
+    setLoginError('');
     try {
       const res = await fetch(`${API_URL}/api/login`, {
         method: 'POST',
@@ -63,16 +77,17 @@ function App() {
         setLoginError(data.error || 'Неверный пароль');
       }
     } catch (e) {
-      setLoginError('Ошибка соединения');
+      setLoginError('Ошибка соединения с сервером');
     }
   };
 
-  const logout = () => {
+  const logout = useCallback(() => {
     setToken(null);
     setUser(null);
     localStorage.removeItem('token');
     setReceipts([]);
-  };
+    setAuthChecking(false);
+  }, []);
 
   // === LOAD RECEIPTS ===
   const loadReceipts = useCallback(async (authToken = token) => {
@@ -80,6 +95,11 @@ function App() {
     setLoading(true);
     try {
       const res = await fetch(`${API_URL}/api/receipts?token=${authToken}`);
+      if (res.status === 401) {
+        logout();
+        return;
+      }
+      if (!res.ok) throw new Error('Ошибка загрузки');
       const data = await res.json();
       const raw = Array.isArray(data) ? data : (data.receipts || []);
       // Фикс Mixed Content для всех image_url
@@ -93,27 +113,35 @@ function App() {
       setReceipts([]);
     }
     setLoading(false);
-  }, [token]);
+  }, [token, logout]);
 
-  // === CHECK AUTH ===
+  // === CHECK AUTH (исправлено: нет мигания, logout в catch) ===
   useEffect(() => {
     if (token) {
+      setAuthChecking(true);
       fetch(`${API_URL}/api/me?token=${token}`)
-        .then(r => r.json())
+        .then(async r => {
+          if (!r.ok) throw new Error('Auth failed: ' + r.status);
+          return r.json();
+        })
         .then(data => {
           const userData = data.user || data;
           if ((data.success !== false) && (userData.id || userData.valid || data.id)) {
             setUser(userData);
             loadReceipts(token);
           } else {
-            logout();
+            throw new Error('Invalid token');
           }
         })
         .catch(err => {
           console.error('Auth check error:', err);
-        });
+          logout(); // ← Теперь точно выкидывает при любой ошибке
+        })
+        .finally(() => setAuthChecking(false));
+    } else {
+      setAuthChecking(false);
     }
-  }, [token]);
+  }, [token, loadReceipts, logout]);
 
   // === FILE HANDLERS ===
   const handleFileSelect = (e) => {
@@ -168,9 +196,8 @@ function App() {
     try {
       const file = selectedFiles[currentFileIndex];
 
-      // === ГЛАВНОЕ: FormData вместо JSON/base64 ===
       const formData = new FormData();
-      formData.append('image', file);                 // поле 'image' — файл
+      formData.append('image', file);
       formData.append('model', selectedModel);
       formData.append('currency', currency);
       formData.append('docType', docType);
@@ -181,21 +208,23 @@ function App() {
         // НЕ указываем Content-Type! Браузер сам поставит multipart/form-data
       });
 
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(`Сервер вернул ${res.status}: ${text}`);
+      const text = await res.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        throw new Error(`Сервер вернул ${res.status}: ${text.slice(0, 200)}`);
       }
 
-      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || data.message || `Ошибка сервера: ${res.status}`);
+      }
 
       if (!data.success && !data.id) {
         throw new Error(data.error || data.message || 'Сохранение не удалось');
       }
 
-      // Бэкенд может вернуть {success: true, data: {...}} или просто объект чека
       const receiptData = data.data || data;
-
-      // Фикс Mixed Content
       if (receiptData.image_url) {
         receiptData.image_url = fixImageUrl(receiptData.image_url);
       }
@@ -221,6 +250,8 @@ function App() {
       if (res.ok) {
         loadReceipts();
         if (viewModal && viewModal.id === id) setViewModal(null);
+      } else {
+        alert('Ошибка удаления');
       }
     } catch (e) {
       console.error('Ошибка удаления:', e);
@@ -235,6 +266,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ receiptIds: [] })
       });
+      if (!res.ok) throw new Error('Export failed');
       const blob = await res.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -244,10 +276,11 @@ function App() {
       window.URL.revokeObjectURL(url);
     } catch (e) {
       console.error('Ошибка экспорта:', e);
+      alert('Ошибка экспорта');
     }
   };
 
-  // === LOAD MODELS ===
+  // === LOAD MODELS (с fallback) ===
   const loadModels = async () => {
     setModelsLoading(true);
     try {
@@ -278,21 +311,26 @@ function App() {
         }
       }
 
+      // Если API не ответили — используем fallback
+      if (allModels.length === 0) {
+        allModels = FALLBACK_MODELS;
+      }
       setModels(allModels);
     } catch (e) {
       console.error('Ошибка загрузки моделей:', e);
+      setModels(FALLBACK_MODELS);
     }
     setModelsLoading(false);
   };
 
   // === HELPERS ===
   const formatDate = (dateStr) => {
-    if (!dateStr) return '-';
+    if (!dateStr) return '—';
     return new Date(dateStr).toLocaleDateString('ru-RU');
   };
 
   const formatAmount = (amount, currency) => {
-    if (amount === null || amount === undefined) return '-';
+    if (amount === null || amount === undefined) return '—';
     return `${parseFloat(amount).toFixed(2)} ${currency || ''}`;
   };
 
@@ -304,6 +342,18 @@ function App() {
     };
     return colors[provider] || '#888';
   };
+
+  // === AUTH CHECKING SCREEN (блокирует мигание) ===
+  if (authChecking) {
+    return (
+      <div className="App">
+        <div className="loading-screen">
+          <div className="spinner"></div>
+          <p>Проверка авторизации...</p>
+        </div>
+      </div>
+    );
+  }
 
   // === LOGIN SCREEN ===
   if (!token) {
@@ -332,6 +382,7 @@ function App() {
       <header className="mini-header">
         <div className="header-left">
           <span className="logo-icon">🧾</span>
+          <span className="user-name">{user?.name || user?.email || 'Пользователь'}</span>
         </div>
         <div className="header-right">
           <button className="logout-btn" onClick={logout}>🚪 Выйти</button>
@@ -569,9 +620,12 @@ function App() {
           </div>
 
           {loading ? (
-            <p>Загрузка...</p>
+            <div className="loading-center">
+              <div className="spinner"></div>
+              <p>Загрузка чеков...</p>
+            </div>
           ) : receipts.length === 0 ? (
-            <p>Нет чеков. Загрузите первый!</p>
+            <p className="empty-state">Нет чеков. Загрузите первый!</p>
           ) : (
             <div className="receipts-grid">
               {receipts.filter(r => {
