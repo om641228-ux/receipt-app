@@ -75,13 +75,12 @@ function App() {
     setLoading(false);
   }, [token]);
 
-  // === CHECK AUTH (ИСПРАВЛЕНО) ===
+  // === CHECK AUTH ===
   useEffect(() => {
     if (token) {
       fetch(`${API_URL}/api/me?token=${token}`)
         .then(r => r.json())
         .then(data => {
-          // auth-owners.js возвращает: { success: true, user: { id, name, role } }
           const userData = data.user || data;
           if ((data.success !== false) && (userData.id || userData.valid || data.id)) {
             setUser(userData);
@@ -92,7 +91,6 @@ function App() {
         })
         .catch(err => {
           console.error('Auth check error:', err);
-          // НЕ делаем logout при сетевой ошибке, чтобы не сбрасывать сразу
         });
     }
   }, [token]);
@@ -135,7 +133,7 @@ function App() {
     }
   };
 
-  // === RECOGNIZE AND SAVE (ИСПРАВЛЕНО — base64 вместо FormData) ===
+  // === RECOGNIZE AND SAVE ===
   const recognizeAndSave = async () => {
     if (!selectedFiles.length) return;
     setRecognizing(true);
@@ -144,7 +142,6 @@ function App() {
     try {
       const file = selectedFiles[currentFileIndex];
 
-      // Конвертируем файл в base64
       const base64 = await new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onloadend = () => resolve(reader.result.split(',')[1]);
@@ -217,7 +214,7 @@ function App() {
     }
   };
 
-  // === LOAD ALL MODELS ===
+  // === LOAD ALL MODELS (МАКСИМАЛЬНЫЙ ВЫБОР) ===
   const loadModels = async () => {
     setModelsLoading(true);
     try {
@@ -226,7 +223,14 @@ function App() {
         { url: `${API_URL}/api/list-groq-models`, provider: 'Groq' },
         { url: `${API_URL}/api/list-ocrspace-models`, provider: 'OCR.space' },
         { url: `${API_URL}/api/list-anthropic-models`, provider: 'Anthropic' },
-        { url: `${API_URL}/api/list-openai-models`, provider: 'OpenAI' }
+        { url: `${API_URL}/api/list-openai-models`, provider: 'OpenAI' },
+        { url: `${API_URL}/api/list-deepseek-models`, provider: 'DeepSeek' },
+        { url: `${API_URL}/api/list-mistral-models`, provider: 'Mistral' },
+        { url: `${API_URL}/api/list-cohere-models`, provider: 'Cohere' },
+        { url: `${API_URL}/api/list-ai21-models`, provider: 'AI21' },
+        { url: `${API_URL}/api/list-together-models`, provider: 'Together' },
+        { url: `${API_URL}/api/list-perplexity-models`, provider: 'Perplexity' },
+        { url: `${API_URL}/api/list-xai-models`, provider: 'xAI' }
       ];
 
       let allModels = [];
@@ -266,6 +270,24 @@ function App() {
   const formatAmount = (amount, currency) => {
     if (!amount) return '-';
     return `${parseFloat(amount).toFixed(2)} ${currency || ''}`;
+  };
+
+  const getProviderColor = (provider) => {
+    const colors = {
+      'Gemini': '#4285f4',
+      'Groq': '#f55036',
+      'OCR.space': '#00a86b',
+      'Anthropic': '#d4a574',
+      'OpenAI': '#10a37f',
+      'DeepSeek': '#4d6bfa',
+      'Mistral': '#ff7000',
+      'Cohere': '#d1a3ff',
+      'AI21': '#ff6b6b',
+      'Together': '#6366f1',
+      'Perplexity': '#22c55e',
+      'xAI': '#1f2937'
+    };
+    return colors[provider] || '#888';
   };
 
   // === LOGIN SCREEN ===
@@ -395,7 +417,7 @@ function App() {
             </button>
 
             {showModelSelector && (
-              <div className="model-dropdown">
+              <div className="model-dropdown" style={{ maxHeight: '400px', overflowY: 'auto' }}>
                 {modelsLoading ? (
                   <p>Загрузка...</p>
                 ) : (
@@ -408,8 +430,9 @@ function App() {
                           setSelectedModel(model.name);
                           setShowModelSelector(false);
                         }}
+                        title={`${model.provider} — ${model.displayName}`}
                       >
-                        <span className={`provider-badge provider-${model.provider.toLowerCase().replace('.', '')}`}>
+                        <span className="provider-badge" style={{ backgroundColor: getProviderColor(model.provider) }}>
                           {model.provider}
                         </span>
                         <span className="model-name">{model.displayName}</span>
