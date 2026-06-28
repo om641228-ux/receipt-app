@@ -75,14 +75,16 @@ function App() {
     setLoading(false);
   }, [token]);
 
-  // === CHECK AUTH ===
+  // === CHECK AUTH (ИСПРАВЛЕНО) ===
   useEffect(() => {
     if (token) {
       fetch(`${API_URL}/api/me?token=${token}`)
         .then(r => r.json())
         .then(data => {
-          if (data.id || data.valid) {
-            setUser(data.user || data);
+          // auth-owners.js возвращает: { success: true, user: { id, name, role } }
+          const userData = data.user || data;
+          if ((data.success !== false) && (userData.id || userData.valid || data.id)) {
+            setUser(userData);
             loadReceipts(token);
           } else {
             logout();
@@ -90,6 +92,7 @@ function App() {
         })
         .catch(err => {
           console.error('Auth check error:', err);
+          // НЕ делаем logout при сетевой ошибке, чтобы не сбрасывать сразу
         });
     }
   }, [token]);
@@ -132,7 +135,7 @@ function App() {
     }
   };
 
-  // === RECOGNIZE AND SAVE ===
+  // === RECOGNIZE AND SAVE (ИСПРАВЛЕНО — base64 вместо FormData) ===
   const recognizeAndSave = async () => {
     if (!selectedFiles.length) return;
     setRecognizing(true);
@@ -140,22 +143,32 @@ function App() {
 
     try {
       const file = selectedFiles[currentFileIndex];
-      const formData = new FormData();
-      formData.append('image', file);
-      formData.append('model', selectedModel);
-      formData.append('currency', currency);
-      formData.append('docType', docType);
-      formData.append('token', token);
+
+      // Конвертируем файл в base64
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result.split(',')[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
 
       const res = await fetch(`${API_URL}/api/upload-receipt?token=${token}`, {
         method: 'POST',
-        body: formData
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image: base64,
+          fileName: file.name,
+          fileType: file.type,
+          model: selectedModel,
+          currency: currency,
+          docType: docType
+        })
       });
 
       const data = await res.json();
 
       if (!data.success) {
-        throw new Error(data.error || 'Распознавание или сохранение не удалось');
+        throw new Error(data.error || 'Сохранение не удалось');
       }
 
       setLastSavedReceipt(data);

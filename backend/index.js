@@ -4,23 +4,23 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const { createClient } = require('@supabase/supabase-js');
-const ws = require('ws');  // ← ДОБАВЛЕНО: WebSocket для Node.js 20
+const ws = require('ws');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Инициализация Supabase клиента с WebSocket transport для Node.js 20
+// ====== Supabase клиент ======
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY,
   {
     realtime: {
-      transport: ws  // ← ДОБАВЛЕНО: фикс для Node.js 20
+      transport: ws
     }
   }
 );
 
-// CORS настройки
+// ====== CORS ======
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -28,7 +28,6 @@ app.use(cors({
   credentials: true
 }));
 
-// Обработка OPTIONS запросов (preflight)
 app.options('*', (req, res) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -38,274 +37,157 @@ app.options('*', (req, res) => {
 
 app.use(express.json({ limit: '50mb' }));
 
-// Создаем папку для загрузок если не существует
-const uploadsDir = path.join(__dirname, '../uploads');
+// ====== Uploads папка ======
+const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 app.use('/uploads', express.static(uploadsDir));
 
-// ✅ Middleware для проверки авторизации
-const requireAuth = async (req, res, next) => {
+// ====== Auth Owners (парольная авторизация) ======
+const authOwners = require('./auth-owners');
+app.use('/api', authOwners);
+
+// ====== INLINE ROUTES (не требуют отдельных файлов) ======
+
+// GET /api/receipts — список чеков
+app.get('/api/receipts', async (req, res) => {
   try {
-    const authHeader = req.headers.authorization;
-    
-    if (!authHeader) {
-      return res.status(401).json({ 
-        success: false, 
-        error: 'Требуется авторизация' 
-      });
-    }
+    const { data, error } = await supabase
+      .from('receipts')
+      .select('*')
+      .order('created_at', { ascending: false });
 
-    const token = authHeader.replace('Bearer ', '');
-    const { data: { user }, error } = await supabase.auth.getUser(token);
-    
-    if (error || !user) {
-      return res.status(401).json({ 
-        success: false, 
-        error: 'Недействительный токен' 
-      });
-    }
-    
-    // Получаем профиль пользователя с ролью
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role, full_name')
-      .eq('id', user.id)
-      .single();
-    
-    req.user = user;
-    req.userRole = profile?.role || 'user';
-    req.userFullName = profile?.full_name || user.email;
-    
-    next();
+    if (error) throw error;
+    res.json(data || []);
   } catch (err) {
-    console.error('Auth middleware error:', err.message);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Ошибка проверки авторизации' 
-    });
+    console.error('GET /api/receipts error:', err.message);
+    res.status(500).json({ error: err.message });
   }
-};
+});
 
-// ✅ Middleware для проверки роли admin
-const requireAdmin = async (req, res, next) => {
-  if (req.userRole !== 'admin') {
-    return res.status(403).json({ 
-      success: false, 
-      error: 'Требуется роль администратора' 
-    });
+// DELETE /api/receipts/:id
+app.delete('/api/receipts/:id', async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('receipts')
+      .delete()
+      .eq('id', req.params.id);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    console.error('DELETE /api/receipts error:', err.message);
+    res.status(500).json({ error: err.message });
   }
-  next();
-};
+});
 
-// ✅ Middleware для логирования запросов
-const logRequest = (req, res, next) => {
-  const timestamp = new Date().toISOString();
-  const user = req.userName ? `${req.userName} (${req.userRole})` : 'anonymous';
-  console.log(`[${timestamp}] ${req.method} ${req.path} - ${user}`);
-  next();
-};
+// POST /api/upload-receipt — загрузка base64 изображения
+app.post('/api/upload-receipt', async (req, res) => {
+  try {
+    const { image, fileName, fileType, model, currency, docType } = req.body;
 
-// Health check endpoint (публичный)
+    if (!image) {
+      return res.status(400).json({ success: false, error: 'Нет изображения (image base64)' });
+    }
+
+    // Сохраняем файл локально
+    const buffer = Buffer.from(image, 'base64');
+    const ext = fileName ? path.extname(fileName) : '.jpg';
+    const savedName = `${Date.now()}${ext}`;
+    const filePath = path.join(uploadsDir, savedName);
+    fs.writeFileSync(filePath, buffer);
+
+    // Формируем URL
+    const host = req.get('host') || `localhost:${PORT}`;
+    const imageUrl = `${req.protocol}://${host}/uploads/${savedName}`;
+
+    // Сохраняем в БД
+    const { data: receipt, error } = await supabase
+      .from('receipts')
+      .insert({
+        image_url: imageUrl,
+        currency: currency || 'AED',
+        document_type: docType || 'receipt',
+        recognition_method: model || 'manual',
+        total_amount: 0,
+        store_name: 'Unknown',
+        items: [],
+        created_at: new Date().toISOString()
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({ success: true, ...receipt });
+  } catch (err) {
+    console.error('POST /api/upload-receipt error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/export-excel (заглушка)
+app.post('/api/export-excel', async (req, res) => {
+  res.status(501).json({ success: false, error: 'Excel export пока не реализован' });
+});
+
+// ====== OPTIONAL MODULES (безопасная загрузка) ======
+function tryRequire(modulePath, routePath) {
+  try {
+    const mod = require(modulePath);
+    if (routePath) app.use(routePath, mod);
+    console.log(`✅ Loaded: ${modulePath}`);
+    return mod;
+  } catch (e) {
+    console.warn(`⚠️  Module not found: ${modulePath} — skipping`);
+    return null;
+  }
+}
+
+tryRequire('./identify', '/api/identify');
+tryRequire('./identify-groq', '/api/identify-groq');
+tryRequire('./identify-ocrspace', '/api/identify-ocrspace');
+tryRequire('./list-gemini-models', '/api/list-gemini-models');
+tryRequire('./list-groq-models', '/api/list-groq-models');
+tryRequire('./list-ocrspace-models', '/api/list-ocrspace-models');
+tryRequire('./list-anthropic-models', '/api/list-anthropic-models');
+tryRequire('./list-openai-models', '/api/list-openai-models');
+tryRequire('./list-and-test-models', '/api/list-and-test-models');
+tryRequire('./compare-recognize', '/api/compare-recognize');
+
+// ====== Health checks ======
 app.get('/', (req, res) => {
-  res.json({ 
-    status: 'ok', 
+  res.json({
+    status: 'ok',
     message: 'Receipt Manager API is running',
     timestamp: new Date().toISOString()
   });
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ 
+  res.json({
     status: 'ok',
-    auth: 'enabled',
+    auth: 'password-based (auth-owners)',
     timestamp: new Date().toISOString()
   });
 });
 
-// ✅ Auth endpoints (публичные)
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    
-    if (!email || !password) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Email и пароль обязательны' 
-      });
-    }
-
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password
-    });
-
-    if (error) {
-      return res.status(401).json({ 
-        success: false, 
-        error: error.message 
-      });
-    }
-
-    // Получаем профиль
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('role, full_name')
-      .eq('id', data.user.id)
-      .single();
-
-    res.json({
-      success: true,
-      user: {
-        id: data.user.id,
-        email: data.user.email,
-        role: profile?.role || 'user',
-        fullName: profile?.full_name || data.user.email
-      },
-      token: data.session.access_token,
-      refreshToken: data.session.refresh_token
-    });
-  } catch (err) {
-    console.error('Login error:', err.message);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Ошибка входа' 
-    });
-  }
-});
-
-app.post('/api/auth/register', async (req, res) => {
-  try {
-    const { email, password, fullName } = req.body;
-    
-    if (!email || !password) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Email и пароль обязательны' 
-      });
-    }
-
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: { 
-          role: 'user',
-          full_name: fullName || email
-        }
-      }
-    });
-
-    if (error) {
-      return res.status(400).json({ 
-        success: false, 
-        error: error.message 
-      });
-    }
-
-    res.json({
-      success: true,
-      message: 'Регистрация успешна! Проверьте email для подтверждения.',
-      user: {
-        id: data.user.id,
-        email: data.user.email
-      }
-    });
-  } catch (err) {
-    console.error('Register error:', err.message);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Ошибка регистрации' 
-    });
-  }
-});
-
-app.post('/api/auth/logout', requireAuth, async (req, res) => {
-  try {
-    const { error } = await supabase.auth.signOut();
-    
-    if (error) {
-      return res.status(500).json({ 
-        success: false, 
-        error: error.message 
-      });
-    }
-
-    res.json({
-      success: true,
-      message: 'Выход выполнен'
-    });
-  } catch (err) {
-    console.error('Logout error:', err.message);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Ошибка выхода' 
-    });
-  }
-});
-
-app.get('/api/auth/me', requireAuth, async (req, res) => {
-  res.json({
-    success: true,
-    user: {
-      id: req.user.id,
-      email: req.user.email,
-      role: req.userRole,
-      fullName: req.userFullName
-    }
-  });
-});
-
-// ✅ Публичные роуты (не требуют авторизации)
-app.use('/api/identify', require('./identify'));
-app.use('/api/identify-groq', require('./identify-groq'));
-app.use('/api/identify-ocrspace', require('./identify-ocrspace'));
-app.use('/api/list-gemini-models', require('./list-gemini-models'));
-app.use('/api/list-groq-models', require('./list-groq-models'));
-app.use('/api/list-ocrspace-models', require('./list-ocrspace-models'));
-app.use('/api/list-and-test-models', require('./list-and-test-models'));
-app.use('/api/compare-recognize', require('./compare-recognize'));
-
-// ✅ Простая авторизация по паролю + владение чеками (auth-owners.js)
-const authOwners = require('./auth-owners');
-const requireAuthAO = authOwners.requireAuth;
-const requireAdminAO = authOwners.requireAdmin;
-const scopeReceiptsByOwner = authOwners.scopeReceiptsByOwner;
-app.use('/api', authOwners);
-
-// ✅ Защищённые роуты (требуют авторизации)
-app.use('/api/upload-file', requireAuthAO, logRequest, require('./upload-file'));
-app.use('/api/upload-folder', requireAuthAO, logRequest, require('./upload-folder'));
-app.use('/api/save-receipt', requireAuthAO, logRequest, require('./save-receipt'));
-
-// ✅ ОТКЛЮЧЕНА АВТОРИЗАЦИЯ для /api/receipts — публичный доступ
-app.use('/api/receipts', require('./receipts'));
-
-app.use('/api/update-receipt-currency', requireAuthAO, logRequest, require('./update-receipt-currency'));
-app.use('/api/reprocess-receipt', requireAuthAO, logRequest, require('./reprocess-receipt'));
-app.use('/api/reprocess-unrecognized', requireAuthAO, logRequest, require('./reprocess-unrecognized'));
-
-// ✅ Экспорт доступен всем авторизованным
-app.use('/api/export-excel', requireAuthAO, logRequest, require('./export-excel'));
-
-// ✅ Админские роуты
-app.use('/api/delete-receipt/:id', requireAuthAO, requireAdminAO, logRequest, require('./delete-receipt'));
-
-// Обработка ошибок
+// ====== Error handler ======
 app.use((err, req, res, next) => {
   console.error('❌ Server error:', err.message);
-  res.status(500).json({ 
+  res.status(500).json({
     success: false,
-    error: err.message 
+    error: err.message
   });
 });
 
+// ====== Start ======
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`✅ Receipt API запущен на порту ${PORT}`);
   console.log(`🌐 URL: http://0.0.0.0:${PORT}`);
   console.log(`📂 Uploads: ${uploadsDir}`);
-  console.log(`🔐 Auth: ${process.env.SUPABASE_URL ? '✅ Включена' : '❌ Отключена'}`);
+  console.log(`🔐 Auth: auth-owners.js (password-based)`);
   console.log(`🤖 Gemini: ${process.env.GEMINI_API_KEY ? '✅' : '❌'}`);
   console.log(`⚡ Groq: ${process.env.GROQ_API_KEY ? '✅' : '❌'}`);
   console.log(`📷 OCR.Space: ${process.env.OCRSPACE_API_KEY ? '✅' : '❌'}`);
