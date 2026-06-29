@@ -14,7 +14,9 @@ const authOwners = require('./auth-owners');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ====== Multer (FormData) ======
+const OBJECTS = ['other', 'Duqe', 'Maria', 'Kit', 'Dubai', 'Tich'];
+
+// ====== Multer ======
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }
@@ -35,7 +37,7 @@ app.options('*', (req, res) => {
 });
 app.use(express.json({ limit: '50mb' }));
 
-// ====== Uploads (local temp only for AI processing) ======
+// ====== Uploads (local temp) ======
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir));
@@ -59,50 +61,36 @@ async function compressImage(buffer, maxWidth = 1500, quality = 85) {
   }
 }
 
-// ====== SUPABASE STORAGE HELPER (обязательный upload) ======
+// ====== SUPABASE STORAGE HELPER (обязательный) ======
 async function uploadImageToSupabase(buffer, filename, contentType) {
   console.log('📤 Uploading to Supabase Storage:', filename);
-  
   const { data, error } = await supabase.storage
     .from('receipts')
-    .upload(filename, buffer, {
-      contentType: contentType || 'image/jpeg',
-      upsert: true
-    });
-
+    .upload(filename, buffer, { contentType: contentType || 'image/jpeg', upsert: true });
   if (error) {
     console.error('❌ Supabase Storage upload error:', error);
     throw new Error(`Supabase Storage upload failed: ${error.message || JSON.stringify(error)}`);
   }
-
-  const { data: urlData } = supabase.storage
-    .from('receipts')
-    .getPublicUrl(filename);
-
+  const { data: urlData } = supabase.storage.from('receipts').getPublicUrl(filename);
   const publicUrl = urlData?.publicUrl;
-  if (!publicUrl) {
-    throw new Error('Supabase Storage returned no publicUrl');
-  }
-
+  if (!publicUrl) throw new Error('Supabase Storage returned no publicUrl');
   console.log('✅ Supabase public URL:', publicUrl);
   return publicUrl;
 }
 
-// ====== POST-PROCESSING: clean items from AI ======
+// ====== POST-PROCESSING ======
 function cleanItems(items) {
   if (!Array.isArray(items)) return [];
   const serviceNames = ['rounding','sub total','tax','total due','total','vat','prepayment','amount due','grand total'];
   return items.filter(item => {
     const name = (item.name || '').toLowerCase().trim();
-    for (const s of serviceNames) {
-      if (name === s || name === s + ':' || name === s + '.') return false;
-    }
+    for (const s of serviceNames) { if (name === s || name === s + ':' || name === s + '.') return false; }
     return true;
   });
 }
 
 // ====== 1. GEMINI ======
-async function recognizeWithGemini(base64Image, mimeType, modelId) {
+async function recognizeWithGemini(base64Image, mimeType, modelId, currency) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY не настроен');
 
@@ -115,17 +103,28 @@ async function recognizeWithGemini(base64Image, mimeType, modelId) {
     generationConfig: { temperature: 0.1, maxOutputTokens: 4096 }
   });
 
+  const currencyBlock = currency && currency !== 'auto'
+    ? `"currency": "${currency}"`
+    : `"currency": "detect from store location (AED/EUR/USD/RUB)"`;
+
   const prompt = `Ты — эксперт по распознаванию чеков. Проанализируй изображение чека и верни результат СТРОГО в формате JSON (без markdown, только чистый JSON).
 
 КРИТИЧЕСКИ ВАЖНО:
 1. Верни МАССИВ items — это ОБЯЗАТЕЛЬНОЕ поле. Каждый товар должен быть объектом с полями: name, name_ru, quantity, price, total.
-2. Название товара — это РЕАЛЬНОЕ название продукта (например "WARRE'S WARRIOR 75CL", "GRAHAM'S SIX GRAPE RESERVE 75CL", "Plastic Bag")
+2. Название товара — это РЕАЛЬНОЕ название продукта.
 3. НЕ используй "2 EACH", "1 EACH", "1 PCS" как название товара — это количество!
-4. Если название товара написано на отдельной строке от кода/количества — возьми название с той строки
-5. Код товара (например E0260, 12991, CN010) — это НЕ название, пропускай его
-6. "Rounding", "Sub Total", "Tax", "Total" — это НЕ товары, не включай их
+4. Код товара (E0260, 12991, CN010) — это НЕ название, пропускай его.
+5. "Rounding", "Sub Total", "Tax", "Total" — это НЕ товары, не включай их.
 
-Структура JSON (ОБЯЗАТЕЛЬНО верни ВСЕ поля):
+ОПРЕДЕЛЕНИЕ ВАЛЮТЫ:
+- Определи валюту по стране/городу/адресу магазина или символам (€, $, £, د.إ, руб)
+- UAE / Dubai / Abu Dhabi → AED
+- Spain / France / Germany / Italy → EUR
+- USA → USD
+- Russia → RUB
+- Если не уверен — используй ${currency && currency !== 'auto' ? currency : 'AED как дефолт'}
+
+Структура JSON:
 {
   "store_name": "название магазина",
   "store_name_ru": "название на русском",
@@ -135,7 +134,7 @@ async function recognizeWithGemini(base64Image, mimeType, modelId) {
   "subtotal": 263.48,
   "tax_amount": 96.02,
   "tax_rate": "5%",
-  "currency": "AED",
+  ${currencyBlock},
   "items": [
     {"name": "WARRE'S WARRIOR 75CL", "name_ru": "Виски WARRE'S WARRIOR 0.75л", "quantity": 2, "price": 79.12, "total": 158.24}
   ],
@@ -156,20 +155,20 @@ async function recognizeWithGemini(base64Image, mimeType, modelId) {
     const clean = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
     const parsed = JSON.parse(clean);
     if (!parsed.raw_text) parsed.raw_text = text;
-    console.log('✅ Gemini parsed:', { store: parsed.store_name, total: parsed.total_amount, items: parsed.items?.length });
+    console.log('✅ Gemini parsed:', { store: parsed.store_name, total: parsed.total_amount, items: parsed.items?.length, currency: parsed.currency });
     return parsed;
   } catch (e) {
     console.error('❌ Gemini JSON parse error:', e.message);
     return {
       store_name: 'Unknown', store_name_ru: null, receipt_date: null, receipt_time: null,
       total_amount: 0, subtotal: null, tax_amount: null, tax_rate: null,
-      currency: null, items: [], raw_text: text
+      currency: currency && currency !== 'auto' ? currency : null, items: [], raw_text: text
     };
   }
 }
 
 // ====== 2. GROQ ======
-async function recognizeWithGroq(base64Image, mimeType, modelId) {
+async function recognizeWithGroq(base64Image, mimeType, modelId, currency) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error('GROQ_API_KEY не настроен');
 
@@ -190,6 +189,10 @@ async function recognizeWithGroq(base64Image, mimeType, modelId) {
   const dataUrl = `data:${mimeType || 'image/jpeg'};base64,${base64Image}`;
   console.log('🚀 Groq request:', model);
 
+  const currencyBlock = currency && currency !== 'auto'
+    ? `"currency": "${currency}"`
+    : `"currency": "detect from store location (AED/EUR/USD/RUB)"`;
+
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -198,7 +201,7 @@ async function recognizeWithGroq(base64Image, mimeType, modelId) {
       messages: [{
         role: 'user',
         content: [
-          { type: 'text', text: 'Проанализируй этот чек. ВАЖНО: название товара — это РЕАЛЬНОЕ название продукта, НЕ "2 EACH" или код товара. Если название на отдельной строке от количества — бери название с отдельной строки. Не включай "Rounding", "Sub Total", "Tax" как товары. Верни СТРОГО в JSON: {store_name, store_name_ru, receipt_date, receipt_time, total_amount, subtotal, tax_amount, tax_rate, currency, items:[{name, name_ru, quantity, price, total}], raw_text}' },
+          { type: 'text', text: `Проанализируй этот чек. ВАЖНО: название товара — это РЕАЛЬНОЕ название продукта, НЕ "2 EACH" или код товара. Не включай "Rounding", "Sub Total", "Tax" как товары. Определи валюту по стране/адресу магазина (UAE→AED, Europe→EUR, USA→USD, Russia→RUB). Верни СТРОГО в JSON: {store_name, store_name_ru, receipt_date, receipt_time, total_amount, subtotal, tax_amount, tax_rate, ${currencyBlock}, items:[{name, name_ru, quantity, price, total}], raw_text}` },
           { type: 'image_url', image_url: { url: dataUrl } }
         ]
       }],
@@ -224,13 +227,13 @@ async function recognizeWithGroq(base64Image, mimeType, modelId) {
     return {
       store_name: 'Unknown', store_name_ru: null, receipt_date: null, receipt_time: null,
       total_amount: 0, subtotal: null, tax_amount: null, tax_rate: null,
-      currency: null, items: [], raw_text: text
+      currency: currency && currency !== 'auto' ? currency : null, items: [], raw_text: text
     };
   }
 }
 
 // ====== 3. OCR.SPACE ======
-async function recognizeWithOCRSpace(buffer, modelId) {
+async function recognizeWithOCRSpace(buffer, modelId, currency) {
   const apiKey = process.env.OCRSPACE_API_KEY;
   if (!apiKey) throw new Error('OCRSPACE_API_KEY не настроен');
 
@@ -239,7 +242,6 @@ async function recognizeWithOCRSpace(buffer, modelId) {
 
   let imageBuffer = buffer;
   let base64Data = buffer.toString('base64');
-  
   if (base64Data.length > 1000000) {
     imageBuffer = await compressImage(buffer, 1200, 70);
     base64Data = imageBuffer.toString('base64');
@@ -248,7 +250,6 @@ async function recognizeWithOCRSpace(buffer, modelId) {
       base64Data = imageBuffer.toString('base64');
     }
   }
-  
   console.log('📐 OCR.space base64 length:', base64Data.length, 'KB:', (base64Data.length/1024).toFixed(0));
 
   const formData = new FormData();
@@ -275,8 +276,8 @@ async function recognizeWithOCRSpace(buffer, modelId) {
   const parsedText = result.ParsedResults?.[0]?.ParsedText || '';
   console.log('📝 OCR.space text (first 500 chars):', parsedText.substring(0, 500));
 
-  const data = parseOCRText(parsedText);
-  console.log('✅ OCR.space parsed:', { store: data.store_name, total: data.total, items: data.items.length });
+  const data = parseOCRText(parsedText, currency);
+  console.log('✅ OCR.space parsed:', { store: data.store_name, total: data.total, items: data.items.length, currency: data.currency });
   
   return {
     store_name: data.store_name || 'Unknown',
@@ -287,15 +288,15 @@ async function recognizeWithOCRSpace(buffer, modelId) {
     subtotal: data.subtotal || null,
     tax_amount: data.tax || null,
     tax_rate: data.tax_rate || null,
-    currency: data.currency || 'AED',
+    currency: data.currency || (currency && currency !== 'auto' ? currency : 'AED'),
     items: data.items || [],
     raw_text: parsedText
   };
 }
 
 // ====== OCR PARSING HELPERS ======
-function parseOCRText(fullText) {
-  const data = { store_name: '', store_name_ru: '', date: null, time: null, total: 0, subtotal: 0, tax: 0, tax_rate: null, currency: detectCurrency(fullText), items: [] };
+function parseOCRText(fullText, defaultCurrency) {
+  const data = { store_name: '', store_name_ru: '', date: null, time: null, total: 0, subtotal: 0, tax: 0, tax_rate: null, currency: detectCurrency(fullText, defaultCurrency), items: [] };
   const lines = fullText.split('\n').map(l => l.trim()).filter(l => l);
   if (lines.length > 0) { data.store_name = lines[0]; data.store_name_ru = translateToRussian(lines[0]); }
 
@@ -340,11 +341,12 @@ function parseOCRText(fullText) {
   return data;
 }
 
-function detectCurrency(fullText) {
+function detectCurrency(fullText, defaultCurrency) {
   if (fullText.includes('AED') || fullText.includes('د.إ') || /DIRHAM|DIRHAMS/i.test(fullText) || /DUBAI|UAE/i.test(fullText)) return 'AED';
   if (fullText.includes('€') || /EURO|EUR\b/i.test(fullText)) return 'EUR';
   if (fullText.includes('$') || /USD\b|DOLLAR/i.test(fullText)) return 'USD';
   if (fullText.includes('₽') || /RUB|RUBLE|РУБ/i.test(fullText)) return 'RUB';
+  if (defaultCurrency && defaultCurrency !== 'auto') return defaultCurrency;
   return 'AED';
 }
 
@@ -395,7 +397,7 @@ app.get('/api/list-ocrspace-models', (req, res) => {
   ]});
 });
 
-// ====== CORE ROUTES (with auth) ======
+// ====== CORE ROUTES ======
 
 app.get('/api/receipts', authOwners.requireAuth, authOwners.scopeReceiptsByOwner, async (req, res) => {
   try {
@@ -407,39 +409,66 @@ app.get('/api/receipts', authOwners.requireAuth, authOwners.scopeReceiptsByOwner
   }
 });
 
-// ====== DELETE with Supabase Storage cleanup ======
+// ====== DELETE ======
 app.delete('/api/receipts/:id', authOwners.requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    
-    // 1. Get receipt to find image_url
-    const { data: receipt, error: fetchErr } = await supabase
-      .from('receipts')
-      .select('image_url')
-      .eq('id', id)
-      .single();
-    
+    const { data: receipt, error: fetchErr } = await supabase.from('receipts').select('image_url').eq('id', id).single();
     if (fetchErr) console.error('Fetch before delete error:', fetchErr);
-
-    // 2. Delete from Supabase Storage if URL points there
     if (receipt?.image_url && receipt.image_url.includes('supabase')) {
-      try {
-        const path = receipt.image_url.split('/receipts/')[1];
-        if (path) {
-          const { error: storageErr } = await supabase.storage.from('receipts').remove([path]);
-          if (storageErr) console.error('⚠️ Supabase storage delete error:', storageErr);
-          else console.log('🗑️ Deleted from Supabase Storage:', path);
-        }
-      } catch (e) {
-        console.error('⚠️ Storage cleanup error:', e.message);
-      }
+      const path = receipt.image_url.split('/receipts/')[1];
+      if (path) await supabase.storage.from('receipts').remove([path]).catch(()=>{});
     }
-
-    // 3. Delete from DB
     const { error } = await supabase.from('receipts').delete().eq('id', id);
     if (error) throw error;
-    
     res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ====== BULK DELETE ======
+app.post('/api/bulk-delete', authOwners.requireAuth, async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'No IDs provided' });
+    const { data: receipts } = await supabase.from('receipts').select('id, image_url').in('id', ids);
+    for (const r of (receipts || [])) {
+      if (r.image_url && r.image_url.includes('supabase')) {
+        const path = r.image_url.split('/receipts/')[1];
+        if (path) await supabase.storage.from('receipts').remove([path]).catch(()=>{});
+      }
+    }
+    const { error } = await supabase.from('receipts').delete().in('id', ids);
+    if (error) throw error;
+    res.json({ success: true, deleted: ids.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ====== BULK UPDATE OBJECT ======
+app.post('/api/bulk-update-object', authOwners.requireAuth, async (req, res) => {
+  try {
+    const { ids, object } = req.body;
+    if (!Array.isArray(ids)) return res.status(400).json({ error: 'No IDs provided' });
+    const obj = OBJECTS.includes(object) ? object : 'other';
+    const { error } = await supabase.from('receipts').update({ object: obj }).in('id', ids);
+    if (error) throw error;
+    res.json({ success: true, updated: ids.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ====== BULK UPDATE CURRENCY ======
+app.post('/api/bulk-update-currency', authOwners.requireAuth, async (req, res) => {
+  try {
+    const { ids, currency } = req.body;
+    if (!Array.isArray(ids)) return res.status(400).json({ error: 'No IDs provided' });
+    const { error } = await supabase.from('receipts').update({ currency }).in('id', ids);
+    if (error) throw error;
+    res.json({ success: true, updated: ids.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -517,47 +546,37 @@ function getProvider(modelName) {
   return 'unknown';
 }
 
-// ====== UPLOAD & RECOGNIZE (Supabase Storage обязателен) ======
+// ====== UPLOAD & RECOGNIZE ======
 app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
   console.log('>>> /api/upload-receipt called');
   try {
     const file = req.file;
-    if (!file) {
-      return res.status(400).json({ success: false, error: 'Нет изображения (поле FormData должно называться "image")' });
-    }
+    if (!file) return res.status(400).json({ success: false, error: 'Нет изображения (поле FormData должно называться "image")' });
 
     console.log('📁 File:', file.originalname, 'Size:', file.size, 'Type:', file.mimetype);
 
-    const { model, currency, docType } = req.body;
-    console.log('📌 Model from frontend:', model);
-    console.log('💰 Currency:', currency, '| DocType:', docType);
+    const { model, currency, docType, object } = req.body;
+    console.log('📌 Model:', model, '| Currency:', currency, '| DocType:', docType, '| Object:', object);
 
-    // 1. Generate unique filename
     const ext = path.extname(file.originalname) || '.jpg';
     const savedName = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}${ext}`;
 
-    // 2. Upload to Supabase Storage (ОБЯЗАТЕЛЬНО!)
+    // 1. Supabase Storage (обязательно)
     let imageUrl;
     try {
       imageUrl = await uploadImageToSupabase(file.buffer, savedName, file.mimetype);
     } catch (storageErr) {
-      console.error('❌ STORAGE FAILED:', storageErr.message);
-      return res.status(500).json({
-        success: false,
-        error: 'Failed to upload image to Supabase Storage: ' + storageErr.message,
-        hint: 'Check SUPABASE_SERVICE_ROLE_KEY in Railway variables'
-      });
+      return res.status(500).json({ success: false, error: 'Failed to upload image: ' + storageErr.message });
     }
 
-    // 3. Save locally for AI processing (optional, temp)
+    // 2. Local temp for AI
     fs.writeFileSync(path.join(uploadsDir, savedName), file.buffer);
 
-    // 4. Compress image for AI
+    // 3. Compress for AI
     const compressedBuffer = await compressImage(file.buffer, 1500, 85);
     const base64Image = compressedBuffer.toString('base64');
-    console.log('📐 Base64 length:', base64Image.length);
 
-    // 5. Recognize with correct provider
+    // 4. Recognize
     let recognized = null;
     let recognitionMethod = model || 'manual';
     let recognitionError = null;
@@ -570,60 +589,48 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
 
     try {
       if (provider === 'gemini') {
-        recognized = await recognizeWithGemini(base64Image, 'image/jpeg', backendModel);
+        recognized = await recognizeWithGemini(base64Image, 'image/jpeg', backendModel, currency);
         recognitionMethod = backendModel;
       } else if (provider === 'groq') {
-        recognized = await recognizeWithGroq(base64Image, 'image/jpeg', backendModel);
-        const visionModels = ['llama-3.2-11b-vision-preview','llama-3.2-90b-vision-preview','meta-llama/llama-4-scout-17b-16e-instruct','meta-llama/llama-4-maverick-17b-128e-instruct','qwen/qwen3.6-27b'];
-        recognitionMethod = visionModels.includes(backendModel) ? backendModel : backendModel + ' (auto→llama-4-scout)';
+        recognized = await recognizeWithGroq(base64Image, 'image/jpeg', backendModel, currency);
+        recognitionMethod = backendModel;
       } else if (provider === 'ocrspace') {
-        recognized = await recognizeWithOCRSpace(compressedBuffer, backendModel);
+        recognized = await recognizeWithOCRSpace(compressedBuffer, backendModel, currency);
         recognitionMethod = backendModel;
       } else {
-        recognitionError = 'Unknown model: ' + frontendModel + ' (resolved: ' + backendModel + ')';
-        console.error('❌', recognitionError);
+        recognitionError = 'Unknown model: ' + frontendModel;
       }
     } catch (err) {
       console.error('❌ Primary recognition failed:', err.message);
       recognitionError = err.message;
-
       if (process.env.GEMINI_API_KEY) {
         try {
-          console.log('🔄 Fallback to Gemini...');
-          recognized = await recognizeWithGemini(base64Image, 'image/jpeg', 'gemini-3.5-flash');
+          recognized = await recognizeWithGemini(base64Image, 'image/jpeg', 'gemini-3.5-flash', currency);
           recognitionMethod = 'gemini-3.5-flash (fallback)';
           recognitionError = null;
         } catch (fallbackErr) {
-          console.error('❌ Fallback also failed:', fallbackErr.message);
           recognitionError += ' | Fallback: ' + fallbackErr.message;
         }
       }
     }
 
     if (!recognized || (recognized.store_name === 'Unknown' && recognized.total_amount === 0 && recognized.items.length === 0)) {
-      if (recognitionError) {
-        return res.status(500).json({ success: false, error: 'Распознавание не удалось: ' + recognitionError, saved: false });
-      }
+      if (recognitionError) return res.status(500).json({ success: false, error: 'Распознавание не удалось: ' + recognitionError, saved: false });
     }
 
-    if (recognitionError) {
-      console.warn('⚠️ Recognition had errors but returned data:', recognitionError);
-    }
-
-    // 6. Clean items
     if (recognized && recognized.items) {
       const before = recognized.items.length;
       recognized.items = cleanItems(recognized.items);
       console.log('🧹 Cleaned items:', recognized.items.length, 'from', before);
     }
 
-    // 7. Save to DB
     const itemsToSave = Array.isArray(recognized?.items) ? recognized.items : [];
     const rawTextToSave = recognized?.raw_text || '';
+    const finalCurrency = (currency && currency !== 'auto') ? currency : (recognized?.currency || 'AED');
 
     const insertData = {
       image_url: imageUrl,
-      currency: sanitizeForDB(currency) || sanitizeForDB(recognized?.currency) || 'AED',
+      currency: finalCurrency,
       document_type: docType || 'receipt',
       recognition_method: recognitionMethod,
       store_name: sanitizeForDB(recognized?.store_name) || 'Unknown',
@@ -636,22 +643,18 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
       tax_rate: sanitizeForDB(recognized?.tax_rate),
       items: itemsToSave,
       raw_text: rawTextToSave,
+      object: OBJECTS.includes(object) ? object : 'other',
       created_at: new Date().toISOString()
     };
 
-    console.log('💾 DB insert:', { store: insertData.store_name, total: insertData.total_amount, items: insertData.items.length, image_url: insertData.image_url });
+    console.log('💾 DB insert:', { store: insertData.store_name, total: insertData.total_amount, items: insertData.items.length, currency: insertData.currency, object: insertData.object });
 
     const { data: receipt, error } = await supabase.from('receipts').insert(insertData).select().single();
     if (error) throw error;
 
     console.log('✅ Saved ID:', receipt.id);
-
     const response = { success: true, ...receipt };
-    if (recognitionError) {
-      response.recognition_error = recognitionError;
-      response.warning = 'Распознавание частично не удалось.';
-    }
-
+    if (recognitionError) { response.recognition_error = recognitionError; response.warning = 'Распознавание частично не удалось.'; }
     res.json(response);
   } catch (err) {
     console.error('❌ CRASH:', err.message);
@@ -662,31 +665,16 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
 // ====== EXPORT EXCEL ======
 app.post('/api/export-excel', authOwners.requireAuth, require('./export-excel'));
 
-// ====== TEST STORAGE endpoint (for debugging) ======
+// ====== TEST STORAGE ======
 app.get('/api/test-storage', async (req, res) => {
   try {
     const testBuffer = Buffer.from('test');
     const testName = `test-${Date.now()}.txt`;
-    
-    const { data, error } = await supabase.storage
-      .from('receipts')
-      .upload(testName, testBuffer, { contentType: 'text/plain', upsert: true });
-    
-    if (error) {
-      return res.json({ success: false, error: error.message, details: error });
-    }
-
+    const { error } = await supabase.storage.from('receipts').upload(testName, testBuffer, { contentType: 'text/plain', upsert: true });
+    if (error) return res.json({ success: false, error: error.message, details: error });
     const { data: urlData } = supabase.storage.from('receipts').getPublicUrl(testName);
-    
-    // Cleanup test file
     await supabase.storage.from('receipts').remove([testName]);
-    
-    res.json({ 
-      success: true, 
-      message: 'Supabase Storage is working!',
-      publicUrl: urlData.publicUrl,
-      bucket: 'receipts'
-    });
+    res.json({ success: true, message: 'Supabase Storage OK!', publicUrl: urlData.publicUrl });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -709,6 +697,9 @@ tryRequire('./identify-groq', '/api/identify-groq');
 tryRequire('./identify-ocrspace', '/api/identify-ocrspace');
 tryRequire('./list-and-test-models', '/api/list-and-test-models');
 tryRequire('./compare-recognize', '/api/compare-recognize');
+tryRequire('./reprocess-receipt', '/api/reprocess-receipt');
+tryRequire('./update-receipt-object', '/api/update-receipt-object');
+tryRequire('./update-receipt-currency', '/api/update-receipt-currency');
 
 // ====== Health ======
 app.get('/', (req, res) => res.json({ status: 'ok', message: 'Receipt Manager API', timestamp: new Date().toISOString() }));
@@ -718,7 +709,7 @@ app.get('/api/health', (req, res) => res.json({
   groq: process.env.GROQ_API_KEY ? '✅' : '❌',
   ocrspace: process.env.OCRSPACE_API_KEY ? '✅' : '❌',
   supabase: process.env.SUPABASE_URL ? '✅' : '❌',
-  supabase_service_role: process.env.SUPABASE_SERVICE_ROLE_KEY ? '✅' : '❌'
+  service_role: process.env.SUPABASE_SERVICE_ROLE_KEY ? '✅' : '❌'
 }));
 
 app.use((err, req, res, next) => {
@@ -731,6 +722,4 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`🤖 Gemini: ${process.env.GEMINI_API_KEY ? '✅' : '❌'}`);
   console.log(`⚡ Groq: ${process.env.GROQ_API_KEY ? '✅' : '❌'}`);
   console.log(`📷 OCR.space: ${process.env.OCRSPACE_API_KEY ? '✅' : '❌'}`);
-  console.log(`🗄️  Supabase URL: ${process.env.SUPABASE_URL ? '✅' : '❌'}`);
-  console.log(`🔑 Supabase Service Role: ${process.env.SUPABASE_SERVICE_ROLE_KEY ? '✅' : '❌'}`);
 });
