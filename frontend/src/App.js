@@ -589,8 +589,10 @@ function App() {
             <div className="saved-receipt-card">
               <h3>✅ Чек сохранён</h3>
               <div className="receipt-preview">
-                {lastSavedReceipt.image_url && (
+                {lastSavedReceipt.image_url ? (
                   <img src={lastSavedReceipt.image_url} alt="Чек" className="receipt-image" />
+                ) : (
+                  <div className="no-image-thumb" style={{width: '250px', height: '200px'}}>📄 Нет фото</div>
                 )}
                 <div className="receipt-info">
                   <p><strong>ID:</strong> {lastSavedReceipt.id}</p>
