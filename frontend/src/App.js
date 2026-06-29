@@ -3,54 +3,36 @@ import './App.css';
 
 const API_URL = 'https://backend-production-adc7.up.railway.app';
 
-// Хелпер: убираем http:// для изображений (Mixed Content)
 const fixImageUrl = (url) => {
   if (!url) return null;
   return url.replace(/^http:\/\//, 'https://');
 };
 
-// Fallback-модели (ВСЕ доступные из API)
 const FALLBACK_MODELS = [
-  // OCR.space (3 движка)
   { name: 'ocrspace-engine1', displayName: 'OCR.space Engine 1 (Basic)', provider: 'OCR.space' },
   { name: 'ocrspace-engine2', displayName: 'OCR.space Engine 2 (Advanced)', provider: 'OCR.space' },
   { name: 'ocrspace-engine3', displayName: 'OCR.space Engine 3 (Handwriting)', provider: 'OCR.space' },
-  // Gemini (все generateContent модели)
   { name: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash', provider: 'Gemini' },
-  { name: 'gemini-2.5-flash-image', displayName: 'Gemini 2.5 Flash Image', provider: 'Gemini' },
-  { name: 'gemini-2.5-flash-lite', displayName: 'Gemini 2.5 Flash Lite', provider: 'Gemini' },
   { name: 'gemini-2.5-pro', displayName: 'Gemini 2.5 Pro', provider: 'Gemini' },
+  { name: 'gemini-3.5-flash', displayName: 'Gemini 3.5 Flash', provider: 'Gemini' },
+  { name: 'gemini-3.1-pro-preview', displayName: 'Gemini 3.1 Pro Preview', provider: 'Gemini' },
+  { name: 'gemini-3.1-flash-lite', displayName: 'Gemini 3.1 Flash Lite', provider: 'Gemini' },
   { name: 'gemini-3-flash-preview', displayName: 'Gemini 3 Flash Preview', provider: 'Gemini' },
   { name: 'gemini-3-pro-image', displayName: 'Gemini 3 Pro Image', provider: 'Gemini' },
-  { name: 'gemini-3-pro-image-preview', displayName: 'Gemini 3 Pro Image Preview', provider: 'Gemini' },
   { name: 'gemini-3.1-flash-image', displayName: 'Gemini 3.1 Flash Image', provider: 'Gemini' },
-  { name: 'gemini-3.1-flash-image-preview', displayName: 'Gemini 3.1 Flash Image Preview', provider: 'Gemini' },
-  { name: 'gemini-3.1-flash-lite', displayName: 'Gemini 3.1 Flash Lite', provider: 'Gemini' },
-  { name: 'gemini-3.1-flash-lite-preview', displayName: 'Gemini 3.1 Flash Lite Preview', provider: 'Gemini' },
-  { name: 'gemini-3.1-pro-preview', displayName: 'Gemini 3.1 Pro Preview', provider: 'Gemini' },
-  { name: 'gemini-3.1-pro-preview-customtools', displayName: 'Gemini 3.1 Pro Preview CustomTools', provider: 'Gemini' },
-  { name: 'gemini-3.5-flash', displayName: 'Gemini 3.5 Flash', provider: 'Gemini' },
   { name: 'gemini-flash-latest', displayName: 'Gemini Flash Latest', provider: 'Gemini' },
-  { name: 'gemini-flash-lite-latest', displayName: 'Gemini Flash Lite Latest', provider: 'Gemini' },
   { name: 'gemini-pro-latest', displayName: 'Gemini Pro Latest', provider: 'Gemini' },
-  { name: 'gemini-robotics-er-1.6-preview', displayName: 'Gemini Robotics ER 1.6 Preview', provider: 'Gemini' },
   { name: 'gemini-1.5-flash', displayName: 'Gemini 1.5 Flash', provider: 'Gemini' },
   { name: 'gemini-1.5-pro', displayName: 'Gemini 1.5 Pro', provider: 'Gemini' },
   { name: 'gemini-2.0-flash', displayName: 'Gemini 2.0 Flash', provider: 'Gemini' },
-  { name: 'gemini-2.0-flash-001', displayName: 'Gemini 2.0 Flash 001', provider: 'Gemini' },
   { name: 'gemini-2.0-flash-lite', displayName: 'Gemini 2.0 Flash Lite', provider: 'Gemini' },
-  { name: 'gemini-2.0-flash-lite-001', displayName: 'Gemini 2.0 Flash Lite 001', provider: 'Gemini' },
-  { name: 'gemma-4-26b-a4b-it', displayName: 'Gemma 4 26B A4B IT', provider: 'Gemini' },
-  { name: 'gemma-4-31b-it', displayName: 'Gemma 4 31B IT', provider: 'Gemini' },
-  // Groq (vision-модели)
   { name: 'groq-llama-3.2-90b', displayName: 'Groq Llama 3.2 90B Vision', provider: 'Groq' },
   { name: 'groq-llama-3.2-11b', displayName: 'Groq Llama 3.2 11B Vision', provider: 'Groq' },
-  { name: 'groq-llama-4-scout', displayName: 'Groq Llama 4 Scout (Vision)', provider: 'Groq' },
-  { name: 'groq-llama-4-maverick', displayName: 'Groq Llama 4 Maverick (Vision)', provider: 'Groq' },
-  { name: 'groq-qwen3.6-27b', displayName: 'Groq Qwen3.6 27B (Vision)', provider: 'Groq' },
-  // Groq (текстовые модели — не для изображений)
-  { name: 'groq-llama-3.3-70b', displayName: 'Groq Llama 3.3 70B (Text)', provider: 'Groq' },
-  { name: 'groq-compound', displayName: 'Groq Compound (Text)', provider: 'Groq' },
+  { name: 'groq-llama-4-scout', displayName: 'Groq Llama 4 Scout', provider: 'Groq' },
+  { name: 'groq-llama-4-maverick', displayName: 'Groq Llama 4 Maverick', provider: 'Groq' },
+  { name: 'groq-qwen3.6-27b', displayName: 'Groq Qwen3.6 27B', provider: 'Groq' },
+  { name: 'groq-llama-3.3-70b', displayName: 'Groq Llama 3.3 70B', provider: 'Groq' },
+  { name: 'groq-compound', displayName: 'Groq Compound', provider: 'Groq' },
   { name: 'groq-compound-mini', displayName: 'Groq Compound Mini', provider: 'Groq' },
   { name: 'groq-allam-2-7b', displayName: 'Groq Allam 2 7B', provider: 'Groq' },
   { name: 'groq-llama-3.1-8b', displayName: 'Groq Llama 3.1 8B', provider: 'Groq' },
@@ -60,7 +42,6 @@ const FALLBACK_MODELS = [
   { name: 'groq-gpt-oss-20b', displayName: 'Groq GPT-OSS 20B', provider: 'Groq' },
   { name: 'groq-gpt-oss-safeguard-20b', displayName: 'Groq GPT-OSS Safeguard 20B', provider: 'Groq' },
   { name: 'groq-qwen3-32b', displayName: 'Groq Qwen3 32B', provider: 'Groq' },
-  { name: 'groq-qwen3.6-27b', displayName: 'Groq Qwen3.6 27B', provider: 'Groq' },
   { name: 'groq-mixtral', displayName: 'Groq Mixtral', provider: 'Groq' },
   { name: 'groq-gemma', displayName: 'Groq Gemma', provider: 'Groq' },
 ];
@@ -70,7 +51,7 @@ function App() {
   const [user, setUser] = useState(null);
   const [receipts, setReceipts] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [authChecking, setAuthChecking] = useState(true); // ← НОВОЕ: блокируем мигание
+  const [authChecking, setAuthChecking] = useState(true);
   const [activeTab, setActiveTab] = useState('upload');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -81,12 +62,12 @@ function App() {
   const [previewUrl, setPreviewUrl] = useState(null);
   const [recognizing, setRecognizing] = useState(false);
   const [lastSavedReceipt, setLastSavedReceipt] = useState(null);
-  const [selectedModel, setSelectedModel] = useState('gemini-3.5-flash'); // ← Рабочая модель по умолчанию
+  const [selectedModel, setSelectedModel] = useState('gemini-3.5-flash');
   const [currency, setCurrency] = useState('AED');
   const [docType, setDocType] = useState('receipt');
   const [showModelSelector, setShowModelSelector] = useState(false);
 
-  const [models, setModels] = useState(FALLBACK_MODELS); // ← Fallback сразу
+  const [models, setModels] = useState(FALLBACK_MODELS);
   const [modelsLoading, setModelsLoading] = useState(false);
 
   const [filterType, setFilterType] = useState('all');
@@ -94,14 +75,12 @@ function App() {
 
   const [viewModal, setViewModal] = useState(null);
 
-  // === ОЧИСТКА PREVIEW URL (утечки памяти) ===
   useEffect(() => {
     return () => {
       previewUrls.forEach(url => URL.revokeObjectURL(url));
     };
   }, [previewUrls]);
 
-  // === LOGIN ===
   const login = async () => {
     setLoginError('');
     try {
@@ -115,7 +94,6 @@ function App() {
         setToken(data.token);
         setUser(data.user);
         localStorage.setItem('token', data.token);
-        setLoginError('');
         loadReceipts(data.token);
       } else {
         setLoginError(data.error || 'Неверный пароль');
@@ -133,7 +111,6 @@ function App() {
     setAuthChecking(false);
   }, []);
 
-  // === LOAD RECEIPTS ===
   const loadReceipts = useCallback(async (authToken = token) => {
     if (!authToken) return;
     setLoading(true);
@@ -146,15 +123,12 @@ function App() {
       if (!res.ok) throw new Error('Ошибка загрузки');
       const data = await res.json();
       const raw = Array.isArray(data) ? data : (data.receipts || []);
-      // Фикс Mixed Content для всех image_url
       const processed = raw.map(r => {
-        // Парсим items если пришло как строка (JSON)
         let items = r.items;
         if (typeof items === 'string') {
           try { items = JSON.parse(items); } catch (e) { items = []; }
         }
         if (!Array.isArray(items)) items = [];
-
         return {
           ...r,
           image_url: fixImageUrl(r.image_url),
@@ -170,7 +144,6 @@ function App() {
     setLoading(false);
   }, [token, logout]);
 
-  // === CHECK AUTH (исправлено: нет мигания, logout в catch) ===
   useEffect(() => {
     if (token) {
       setAuthChecking(true);
@@ -190,7 +163,7 @@ function App() {
         })
         .catch(err => {
           console.error('Auth check error:', err);
-          logout(); // ← Теперь точно выкидывает при любой ошибке
+          logout();
         })
         .finally(() => setAuthChecking(false));
     } else {
@@ -198,7 +171,6 @@ function App() {
     }
   }, [token, loadReceipts, logout]);
 
-  // === FILE HANDLERS ===
   const handleFileSelect = (e) => {
     const files = Array.from(e.target.files).filter(f => f.type.startsWith('image/'));
     if (files.length > 0) {
@@ -242,7 +214,6 @@ function App() {
     }
   };
 
-  // === RECOGNIZE AND SAVE (FORMDATA!) ===
   const recognizeAndSave = async () => {
     if (!selectedFiles.length) return;
     setRecognizing(true);
@@ -260,7 +231,6 @@ function App() {
       const res = await fetch(`${API_URL}/api/upload-receipt?token=${token}`, {
         method: 'POST',
         body: formData
-        // НЕ указываем Content-Type! Браузер сам поставит multipart/form-data
       });
 
       const text = await res.text();
@@ -295,7 +265,6 @@ function App() {
     setRecognizing(false);
   };
 
-  // === DELETE RECEIPT ===
   const deleteReceipt = async (id) => {
     if (!window.confirm('Удалить чек?')) return;
     try {
@@ -313,7 +282,6 @@ function App() {
     }
   };
 
-  // === EXPORT EXCEL ===
   const exportExcel = async () => {
     try {
       const res = await fetch(`${API_URL}/api/export-excel?token=${token}`, {
@@ -335,7 +303,6 @@ function App() {
     }
   };
 
-  // === LOAD MODELS (с fallback) ===
   const loadModels = async () => {
     setModelsLoading(true);
     try {
@@ -361,24 +328,19 @@ function App() {
               }))];
             }
           }
-        } catch (e) {
-          console.error(`Error loading ${endpoint.provider}:`, e);
-        }
+        } catch (e) {}
       }
 
-      // Если API не ответили — используем fallback
       if (allModels.length === 0) {
         allModels = FALLBACK_MODELS;
       }
       setModels(allModels);
     } catch (e) {
-      console.error('Ошибка загрузки моделей:', e);
       setModels(FALLBACK_MODELS);
     }
     setModelsLoading(false);
   };
 
-  // === HELPERS ===
   const formatDate = (dateStr) => {
     if (!dateStr) return '—';
     return new Date(dateStr).toLocaleDateString('ru-RU');
@@ -398,7 +360,6 @@ function App() {
     return colors[provider] || '#888';
   };
 
-  // === AUTH CHECKING SCREEN (блокирует мигание) ===
   if (authChecking) {
     return (
       <div className="App">
@@ -410,7 +371,6 @@ function App() {
     );
   }
 
-  // === LOGIN SCREEN ===
   if (!token) {
     return (
       <div className="App">
@@ -431,7 +391,6 @@ function App() {
     );
   }
 
-  // === MAIN APP ===
   return (
     <div className="App">
       <header className="mini-header">
@@ -453,7 +412,6 @@ function App() {
         </button>
       </nav>
 
-      {/* === VIEW MODAL === */}
       {viewModal && (
         <div className="modal-overlay" onClick={() => setViewModal(null)}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
@@ -487,13 +445,7 @@ function App() {
                   <h3>Товары ({viewModal.items?.length || 0})</h3>
                   <table className="items-table">
                     <thead>
-                      <tr>
-                        <th>№</th>
-                        <th>Товар</th>
-                        <th>Кол-во</th>
-                        <th>Цена</th>
-                        <th>Сумма</th>
-                      </tr>
+                      <tr><th>№</th><th>Товар</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr>
                     </thead>
                     <tbody>
                       {(viewModal.items || []).map((item, i) => (
@@ -526,7 +478,6 @@ function App() {
         </div>
       )}
 
-      {/* === UPLOAD TAB === */}
       {activeTab === 'upload' && (
         <div className="upload-section">
           <div className="top-controls">
@@ -626,7 +577,7 @@ function App() {
 
           <div className="recognize-bar">
             <button 
-              className="recognize-main-btn full-width"
+              className="recognize-main-btn"
               onClick={recognizeAndSave}
               disabled={!selectedFiles.length || recognizing}
             >
@@ -647,8 +598,10 @@ function App() {
                   <p><strong>Дата:</strong> {formatDate(lastSavedReceipt.receipt_date)}</p>
                   <p><strong>Итого:</strong> {formatAmount(lastSavedReceipt.total_amount, lastSavedReceipt.currency)}</p>
                   <p><strong>Товаров:</strong> {lastSavedReceipt.items?.length || 0}</p>
+                  <p><strong>Метод:</strong> {lastSavedReceipt.recognition_method || '—'}</p>
+                  {lastSavedReceipt.warning && <p className="error">⚠️ {lastSavedReceipt.warning}</p>}
                   {lastSavedReceipt.items && lastSavedReceipt.items.length > 0 && (
-                    <div className="items-preview">
+                    <div className="receipt-items-preview">
                       <h4>Товары:</h4>
                       <ul>
                         {lastSavedReceipt.items.map((item, i) => (
@@ -671,7 +624,6 @@ function App() {
         </div>
       )}
 
-      {/* === LIST TAB === */}
       {activeTab === 'list' && (
         <div className="list-section">
           <div className="filters">

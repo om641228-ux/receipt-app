@@ -67,18 +67,12 @@ async function compressImage(buffer, maxWidth = 1500, quality = 85) {
   }
 }
 
-// ====== RECOGNITION FUNCTIONS ======
-
 // ====== POST-PROCESSING: clean items from AI ======
 function cleanItems(items) {
   if (!Array.isArray(items)) return [];
-
-  // Только удаляем очевидно служебные строки
-  const serviceNames = ['rounding', 'sub total', 'tax', 'total due', 'total', 'vat', 'prepayment', 'amount due', 'grand total'];
-
+  const serviceNames = ['rounding','sub total','tax','total due','total','vat','prepayment','amount due','grand total'];
   return items.filter(item => {
     const name = (item.name || '').toLowerCase().trim();
-    // Удаляем только если название ТОЧНО совпадает со служебным
     for (const s of serviceNames) {
       if (name === s || name === s + ':' || name === s + '.') return false;
     }
@@ -86,86 +80,7 @@ function cleanItems(items) {
   });
 }
 
-
-// ====== PARSE ITEMS FROM RAW TEXT (fallback if AI fails) ======
-function parseItemsFromText(text) {
-  if (!text) return [];
-  const items = [];
-  const lines = text.split('\n').map(l => l.trim()).filter(l => l);
-  const usedNames = new Set();
-
-  function isCode(str) {
-    return /^E\d+$/.test(str) || /^CN\d+$/.test(str) || /^\d{5,}$/.test(str);
-  }
-  function isSkip(str) {
-    return /^EACH$/i.test(str) || /^PCS$/i.test(str) || /^\d+$/.test(str) ||
-           /Total|Tax|Sub|VAT|Rounding|Prepayment|Amount|DUE|RATE|Manager|Driver|Order|Phone|Address|Name|Date|Time|Receipt|Terminal|Cashier|Account|Customer|Payment|Card|Scan|Thank|Products|return|exchange|sealed|unopened|packaging|personalized|comment|NO\s*CUTLERY|ALL\s*AMOUNTS/i.test(str);
-  }
-  function findName(startIdx) {
-    for (let j = startIdx; j >= Math.max(0, startIdx - 6); j--) {
-      const candidate = lines[j];
-      if (isCode(candidate)) continue;
-      if (isSkip(candidate)) continue;
-      if (candidate.length < 3) continue;
-      if (/^\d/.test(candidate)) continue; // starts with number
-      return candidate;
-    }
-    return null;
-  }
-
-  // Pattern 1: "Qty Price Total" (3 numbers on one line)
-  for (let i = 0; i < lines.length; i++) {
-    const match = lines[i].match(/^(\d+)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)$/);
-    if (match && i > 0) {
-      const name = findName(i - 1);
-      if (name && !usedNames.has(name)) {
-        usedNames.add(name);
-        items.push({
-          name: name,
-          name_ru: name,
-          quantity: parseInt(match[1]),
-          price: parseFloat(match[2]),
-          total: parseFloat(match[3])
-        });
-      }
-    }
-  }
-
-  // Pattern 2: standalone price line (like "79.12", "104.76")
-  for (let i = 0; i < lines.length; i++) {
-    if (/^\d+\.\d{2}$/.test(lines[i]) && !items.find(it => Math.abs(it.price - parseFloat(lines[i])) < 0.01)) {
-      const price = parseFloat(lines[i]);
-      let qty = 1;
-      let name = null;
-
-      for (let j = i - 1; j >= Math.max(0, i - 6); j--) {
-        const candidate = lines[j];
-        if (isCode(candidate)) continue;
-        if (/^\d+$/.test(candidate)) { qty = parseInt(candidate); continue; }
-        if (isSkip(candidate)) continue;
-        if (candidate.length > 2 && !/^\d/.test(candidate)) {
-          name = candidate;
-          break;
-        }
-      }
-
-      if (name && !usedNames.has(name)) {
-        usedNames.add(name);
-        items.push({
-          name: name,
-          name_ru: name,
-          quantity: qty,
-          price: price,
-          total: price * qty
-        });
-      }
-    }
-  }
-
-  return items;
-}
-
-// 1. GEMINI
+// ====== 1. GEMINI ======
 async function recognizeWithGemini(base64Image, mimeType, modelId) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY не настроен');
@@ -219,6 +134,7 @@ async function recognizeWithGemini(base64Image, mimeType, modelId) {
   try {
     const clean = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
     const parsed = JSON.parse(clean);
+    if (!parsed.raw_text) parsed.raw_text = text;
     console.log('✅ Gemini parsed:', {
       store: parsed.store_name,
       total: parsed.total_amount,
@@ -235,7 +151,7 @@ async function recognizeWithGemini(base64Image, mimeType, modelId) {
   }
 }
 
-// 2. GROQ
+// ====== 2. GROQ ======
 async function recognizeWithGroq(base64Image, mimeType, modelId) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error('GROQ_API_KEY не настроен');
@@ -249,12 +165,13 @@ async function recognizeWithGroq(base64Image, mimeType, modelId) {
     'qwen/qwen3.6-27b'
   ];
 
-  // Если выбрана НЕ vision-модель — ошибка
+  // Если выбрана НЕ vision-модель — автоматически подменяем на vision-модель
+  let model = modelId;
   if (!visionModels.includes(modelId)) {
-    throw new Error(`Модель ${modelId} не поддерживает распознавание изображений в Groq. Выберите vision-модель: llama-3.2-90b-vision-preview или llama-3.2-11b-vision-preview`);
+    console.log(`⚠️ Модель ${modelId} не поддерживает vision, авто-подмена на llama-4-scout`);
+    model = 'meta-llama/llama-4-scout-17b-16e-instruct';
   }
 
-  const model = modelId;
   const dataUrl = `data:${mimeType || 'image/jpeg'};base64,${base64Image}`;
 
   console.log('🚀 Groq request:', model);
@@ -287,7 +204,9 @@ async function recognizeWithGroq(base64Image, mimeType, modelId) {
 
   try {
     const clean = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-    return JSON.parse(clean);
+    const parsed = JSON.parse(clean);
+    if (!parsed.raw_text) parsed.raw_text = text;
+    return parsed;
   } catch (e) {
     return {
       store_name: 'Unknown', store_name_ru: null, receipt_date: null, receipt_time: null,
@@ -297,15 +216,16 @@ async function recognizeWithGroq(base64Image, mimeType, modelId) {
   }
 }
 
-// 3. OCR.SPACE — с агрессивным сжатием
+// ====== 3. OCR.SPACE ======
 async function recognizeWithOCRSpace(buffer, modelId) {
   const apiKey = process.env.OCRSPACE_API_KEY;
   if (!apiKey) throw new Error('OCRSPACE_API_KEY не настроен');
 
   const engineMap = {
-    'ocrspace-default': '1', 'ocrspace-engine2': '2', 'ocrspace-engine3': '3',
-    'ocrspace-engine5': '5', 'ocrspace-handwritten': '2', 'ocrspace-receipt': '5',
-    'ocr-engine-1': '1', 'ocr-engine-2': '2'
+    'ocrspace-engine1': '1',
+    'ocrspace-engine2': '2',
+    'ocrspace-engine3': '3',
+    'ocrspace-engine5': '5'
   };
   const engine = engineMap[modelId] || '2';
 
@@ -336,7 +256,7 @@ async function recognizeWithOCRSpace(buffer, modelId) {
   formData.append('OCREngine', engine);
   formData.append('scale', 'true');
 
-    const response = await axios.post('https://api.ocr.space/parse/image', formData, {
+  const response = await axios.post('https://api.ocr.space/parse/image', formData, {
     headers: { ...formData.getHeaders() },
     maxContentLength: Infinity,
     maxBodyLength: Infinity,
@@ -352,7 +272,7 @@ async function recognizeWithOCRSpace(buffer, modelId) {
   const parsedText = result.ParsedResults?.[0]?.ParsedText || '';
   console.log('📝 OCR.space text (first 500 chars):', parsedText.substring(0, 500));
 
-  const data = parseReceiptText(parsedText);
+  const data = parseOCRText(parsedText);
   
   console.log('✅ OCR.space parsed:', {
     store: data.store_name,
@@ -375,8 +295,8 @@ async function recognizeWithOCRSpace(buffer, modelId) {
   };
 }
 
-// === ПАРСИНГ OCR.SPACE ===
-function parseReceiptText(fullText) {
+// ====== OCR PARSING HELPERS ======
+function parseOCRText(fullText) {
   const data = {
     store_name: '',
     store_name_ru: '',
@@ -387,10 +307,7 @@ function parseReceiptText(fullText) {
     tax: 0,
     tax_rate: null,
     currency: detectCurrency(fullText),
-    country: null,
-    items: [],
-    payment_method: null,
-    payment_amount: 0
+    items: []
   };
 
   const lines = fullText.split('\n').map(l => l.trim()).filter(l => l);
@@ -415,7 +332,6 @@ function parseReceiptText(fullText) {
     /ИТОГО[:\s]*([\d,.]+)/i,
     /ВСЕГО[:\s]*([\d,.]+)/i,
     /TOTAL\s*DUE[:\s]*([\d,.]+)/i,
-    /TOTAL\s*DUE\s*:?\s*([\d,.]+)/i,
     /AMOUNT\s*DUE[:\s]*([\d,.]+)/i
   ];
   
@@ -433,12 +349,12 @@ function parseReceiptText(fullText) {
     data.tax = parseFloat(vatMatch[2].replace(/,/g, ''));
   }
 
-  const subMatch = fullText.match(/(?:SUBTOTAL|SUB\s*TOTAL|Total before VAT)[:\s]*[A-Z]{0,3}\s*([\d,.]+)/i);
+  const subMatch = fullText.match(/(?:SUBTOTAL|SUB\s*TOTAL)[:\s]*[A-Z]{0,3}\s*([\d,.]+)/i);
   if (subMatch) {
     data.subtotal = parseFloat(subMatch[1].replace(/,/g, ''));
   }
 
-  // Паттерн 1: "название x кол-во цена сумма"
+  // Pattern 1: "название x кол-во цена сумма"
   const pattern1 = /^(.+?)\s+(\d+)\s*[xX×]\s*([\d,.]+)\s+([\d,.]+)/gm;
   let match;
   while ((match = pattern1.exec(fullText)) !== null) {
@@ -454,7 +370,7 @@ function parseReceiptText(fullText) {
     }
   }
 
-  // Паттерн 2: "название  кол-во  цена  сумма"
+  // Pattern 2: "название  кол-во  цена  сумма"
   if (data.items.length === 0) {
     const pattern2 = /^(.+?)\s{2,}(\d+)\s+([\d,.]+)\s+([\d,.]+)\s*$/gm;
     while ((match = pattern2.exec(fullText)) !== null) {
@@ -471,7 +387,7 @@ function parseReceiptText(fullText) {
     }
   }
 
-  // Паттерн 3: "название цена"
+  // Pattern 3: "название цена"
   if (data.items.length === 0) {
     const pattern3 = /^(.+?)\s+([\d]{1,4}[.,]\d{2})\s*$/gm;
     while ((match = pattern3.exec(fullText)) !== null) {
@@ -489,9 +405,6 @@ function parseReceiptText(fullText) {
     }
   }
 
-  if (/DUBAI|UAE|UNITED ARAB/i.test(fullText)) data.country = 'UAE';
-  else if (/RUSSIA|РОССИЯ|МОСКВА/i.test(fullText)) data.country = 'RU';
-
   return data;
 }
 
@@ -505,7 +418,7 @@ function detectCurrency(fullText) {
 
 function isProductLine(name) {
   if (!name || name.length < 2 || name.length > 100) return false;
-  const excluded = ['total', 'subtotal', 'итого', 'всего', 'vat', 'ндс', 'tax', 'налог', 'cash', 'card', 'visa', 'mastercard', 'payment', 'change', 'сдача', 'receipt', 'чек', 'date', 'дата', 'time', 'время', 'thank', 'спасибо', 'address', 'адрес', 'tel', 'phone', 'тел', 'www', 'http', 'email', 'order', 'delivery', 'prepayment', 'amounts in', 'all amounts', 'manager', 'driver', 'order accepted', 'delivery time', 'order delivered'];
+  const excluded = ['total','subtotal','итого','всего','vat','ндс','tax','налог','cash','card','visa','mastercard','payment','change','сдача','receipt','чек','date','дата','time','время','thank','спасибо','address','адрес','tel','phone','тел','www','http','email','order','delivery','prepayment','amounts in','all amounts','manager','driver','order accepted','delivery time','order delivered'];
   const lower = name.toLowerCase();
   return !excluded.some(e => lower.includes(e));
 }
@@ -534,7 +447,7 @@ app.get('/api/list-gemini-models', (req, res) => {
   res.json({
     models: [
       { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
-      { id: 'gemini-3.5-flash', name: 'Gemini 2.0 Flash' },
+      { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash' },
       { id: 'gemini-1.5-flash-002', name: 'Gemini 1.5 Flash 002' },
       { id: 'gemini-1.5-pro-002', name: 'Gemini 1.5 Pro 002' }
     ]
@@ -546,7 +459,10 @@ app.get('/api/list-groq-models', (req, res) => {
     models: [
       { id: 'llama-3.2-11b-vision-preview', name: 'Llama 3.2 11B Vision' },
       { id: 'llama-3.2-90b-vision-preview', name: 'Llama 3.2 90B Vision' },
-      { id: 'meta-llama/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout' }
+      { id: 'meta-llama/llama-4-scout-17b-16e-instruct', name: 'Llama 4 Scout' },
+      { id: 'llama-3.3-70b-versatile', name: 'Llama 3.3 70B' },
+      { id: 'mixtral-8x7b-32768', name: 'Mixtral 8x7B' },
+      { id: 'gemma2-9b-it', name: 'Gemma 2 9B' }
     ]
   });
 });
@@ -554,15 +470,16 @@ app.get('/api/list-groq-models', (req, res) => {
 app.get('/api/list-ocrspace-models', (req, res) => {
   res.json({
     models: [
-      { id: 'ocrspace-engine2', name: 'OCR.space Engine 2' },
-      { id: 'ocrspace-engine5', name: 'OCR.space Engine 5' }
+      { id: 'ocrspace-engine1', name: 'Engine 1 (Basic)' },
+      { id: 'ocrspace-engine2', name: 'Engine 2 (Advanced)' },
+      { id: 'ocrspace-engine3', name: 'Engine 3 (Handwriting)' }
     ]
   });
 });
 
-// ====== CORE ROUTES ======
+// ====== CORE ROUTES (with auth) ======
 
-app.get('/api/receipts', async (req, res) => {
+app.get('/api/receipts', authOwners.requireAuth, authOwners.scopeReceiptsByOwner, async (req, res) => {
   try {
     const { data, error } = await supabase.from('receipts').select('*').order('created_at', { ascending: false });
     if (error) throw error;
@@ -572,7 +489,7 @@ app.get('/api/receipts', async (req, res) => {
   }
 });
 
-app.delete('/api/receipts/:id', async (req, res) => {
+app.delete('/api/receipts/:id', authOwners.requireAuth, async (req, res) => {
   try {
     const { error } = await supabase.from('receipts').delete().eq('id', req.params.id);
     if (error) throw error;
@@ -589,7 +506,6 @@ function sanitizeForDB(val) {
 
 function validateTime(timeStr) {
   if (!timeStr) return null;
-  // Match HH:MM or HH:MM:SS
   const match = String(timeStr).match(/^(\d{1,2}):([0-5]\d)(?::([0-5]\d))?$/);
   if (!match) return null;
   const h = parseInt(match[1]);
@@ -601,9 +517,7 @@ function validateTime(timeStr) {
 function validateDate(dateStr) {
   if (!dateStr) return null;
   const s = String(dateStr).trim();
-  // Already YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  // DD/MM/YYYY or DD-MM-YYYY
   const m = s.match(/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/);
   if (m) {
     const d = parseInt(m[1]);
@@ -615,10 +529,9 @@ function validateDate(dateStr) {
   return null;
 }
 
-// ====== MODEL MAPPING (frontend names -> backend names) ======
-// ВСЕ модели из реальных API (Gemini, Groq, OCR.space)
+// ====== MODEL MAPPING ======
 const MODEL_MAP = {
-  // === GEMINI (все generateContent модели) ===
+  // GEMINI
   'gemini-2.5-flash': 'gemini-2.5-flash',
   'gemini-2.5-flash-image': 'gemini-2.5-flash-image',
   'gemini-2.5-flash-lite': 'gemini-2.5-flash-lite',
@@ -639,10 +552,10 @@ const MODEL_MAP = {
   'gemini-robotics-er-1.6-preview': 'gemini-robotics-er-1.6-preview',
   'gemini-1.5-flash': 'gemini-1.5-flash',
   'gemini-1.5-pro': 'gemini-1.5-pro',
-  'gemini-3.5-flash': 'gemini-3.5-flash',
-  'gemini-3.5-flash-001': 'gemini-3.5-flash-001',
-  'gemini-3.5-flash-lite': 'gemini-3.5-flash-lite',
-  'gemini-3.5-flash-lite-001': 'gemini-3.5-flash-lite-001',
+  'gemini-2.0-flash': 'gemini-2.0-flash',
+  'gemini-2.0-flash-001': 'gemini-2.0-flash-001',
+  'gemini-2.0-flash-lite': 'gemini-2.0-flash-lite',
+  'gemini-2.0-flash-lite-001': 'gemini-2.0-flash-lite-001',
   'gemini-2.5-flash-preview-tts': 'gemini-2.5-flash-preview-tts',
   'gemini-2.5-pro-preview-tts': 'gemini-2.5-pro-preview-tts',
   'gemma-4-26b-a4b-it': 'gemma-4-26b-a4b-it',
@@ -655,7 +568,7 @@ const MODEL_MAP = {
   'deep-research-max-preview-04-2026': 'deep-research-max-preview-04-2026',
   'deep-research-preview-04-2026': 'deep-research-preview-04-2026',
   'deep-research-pro-preview-12-2025': 'deep-research-pro-preview-12-2025',
-  // === GROQ (все модели из API) ===
+  // GROQ
   'groq-llama-3.3-70b': 'llama-3.3-70b-versatile',
   'groq-llama-4-scout': 'meta-llama/llama-4-scout-17b-16e-instruct',
   'groq-compound': 'groq/compound',
@@ -671,10 +584,10 @@ const MODEL_MAP = {
   'groq-qwen3.6-27b': 'qwen/qwen3.6-27b',
   'groq-mixtral': 'mixtral-8x7b-32768',
   'groq-gemma': 'gemma2-9b-it',
-  // === OCR.SPACE (3 движка) ===
+  // OCR.SPACE
   'ocrspace-engine1': 'ocrspace-engine1',
   'ocrspace-engine2': 'ocrspace-engine2',
-  'ocrspace-engine3': 'ocrspace-engine3',
+  'ocrspace-engine3': 'ocrspace-engine3'
 };
 
 function resolveModel(modelName) {
@@ -689,7 +602,7 @@ function getProvider(modelName) {
   return 'unknown';
 }
 
-// POST /api/upload-receipt
+// ====== UPLOAD & RECOGNIZE ======
 app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
   console.log('>>> /api/upload-receipt called');
   try {
@@ -745,15 +658,13 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
 
     try {
       if (provider === 'gemini') {
-        console.log('🔍 Gemini...');
         recognized = await recognizeWithGemini(base64Image, 'image/jpeg', backendModel);
         recognitionMethod = backendModel;
       } else if (provider === 'groq') {
-        console.log('🔍 Groq...');
         recognized = await recognizeWithGroq(base64Image, 'image/jpeg', backendModel);
-        recognitionMethod = backendModel;
+        const visionModels = ['llama-3.2-11b-vision-preview','llama-3.2-90b-vision-preview','meta-llama/llama-4-scout-17b-16e-instruct','meta-llama/llama-4-maverick-17b-128e-instruct','qwen/qwen3.6-27b'];
+        recognitionMethod = visionModels.includes(backendModel) ? backendModel : backendModel + ' (auto→llama-4-scout)';
       } else if (provider === 'ocrspace') {
-        console.log('🔍 OCR.space...');
         recognized = await recognizeWithOCRSpace(compressedBuffer, backendModel);
         recognitionMethod = backendModel;
       } else {
@@ -764,11 +675,10 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
       console.error('❌ Primary recognition failed:', err.message);
       recognitionError = err.message;
 
-      // Fallback на Gemini ТОЛЬКО если модель не была явно выбрана пользователем
-      // (т.е. если provider === 'unknown' или не указана модель)
-      if (!model && provider !== 'gemini' && process.env.GEMINI_API_KEY) {
+      // Fallback на Gemini только если primary полностью провалился
+      if (process.env.GEMINI_API_KEY) {
         try {
-          console.log('🔄 Fallback to Gemini (no model selected)...');
+          console.log('🔄 Fallback to Gemini...');
           recognized = await recognizeWithGemini(base64Image, 'image/jpeg', 'gemini-3.5-flash');
           recognitionMethod = 'gemini-3.5-flash (fallback)';
           recognitionError = null;
@@ -790,7 +700,6 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
       }
     }
 
-    // Если была ошибка но распознавание частично прошло — показываем предупреждение
     if (recognitionError) {
       console.warn('⚠️ Recognition had errors but returned data:', recognitionError);
     }
@@ -806,12 +715,6 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     const itemsToSave = Array.isArray(recognized?.items) ? recognized.items : [];
     const rawTextToSave = recognized?.raw_text || '';
 
-    console.log('💾 Saving to DB:', {
-      store: recognized?.store_name,
-      items_count: itemsToSave.length,
-      raw_text_length: rawTextToSave.length
-    });
-
     const insertData = {
       image_url: imageUrl,
       currency: sanitizeForDB(currency) || sanitizeForDB(recognized?.currency) || 'AED',
@@ -825,8 +728,8 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
       subtotal: sanitizeForDB(recognized?.subtotal),
       tax_amount: sanitizeForDB(recognized?.tax_amount),
       tax_rate: sanitizeForDB(recognized?.tax_rate),
-      items: itemsToSave,  // массив объектов — Supabase JSONB
-      raw_text: rawTextToSave,  // текст — не используем sanitize чтобы не потерять данные
+      items: itemsToSave,
+      raw_text: rawTextToSave,
       created_at: new Date().toISOString()
     };
 
@@ -854,9 +757,8 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
   }
 });
 
-app.post('/api/export-excel', async (req, res) => {
-  res.status(501).json({ success: false, error: 'Excel export пока не реализован' });
-});
+// ====== EXPORT EXCEL (real module) ======
+app.post('/api/export-excel', authOwners.requireAuth, require('./export-excel'));
 
 // ====== OPTIONAL MODULES ======
 function tryRequire(modulePath, routePath) {
