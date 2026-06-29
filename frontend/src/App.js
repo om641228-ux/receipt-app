@@ -4,6 +4,7 @@ import './App.css';
 const API_URL = 'https://backend-production-adc7.up.railway.app';
 const OBJECTS = ['other', 'Duqe', 'Maria', 'Kit', 'Dubai', 'Tich'];
 const ITEMS_PER_PAGE_OPTIONS = [10, 20, 50, 'all'];
+const MAX_FILE_SIZE_MB = 2; // если больше — сжимаем через Canvas
 
 const fixImageUrl = (url) => {
   if (!url) return null;
@@ -48,6 +49,57 @@ const FALLBACK_MODELS = [
   { name: 'groq-gemma', displayName: 'Groq Gemma', provider: 'Groq' },
 ];
 
+// ====== FRONTEND IMAGE COMPRESSION ======
+function compressImageFile(file, maxWidth = 1600, maxHeight = 2400, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    if (file.size <= MAX_FILE_SIZE_MB * 1024 * 1024) {
+      // Маленький файл — не сжимаем
+      return resolve(file);
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        // Сохраняем пропорции
+        if (width > maxWidth) {
+          height = Math.round(height * (maxWidth / width));
+          width = maxWidth;
+        }
+        if (height > maxHeight) {
+          width = Math.round(width * (maxHeight / height));
+          height = maxHeight;
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) return reject(new Error('Canvas toBlob failed'));
+            const compressedFile = new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), {
+              type: 'image/jpeg',
+              lastModified: Date.now()
+            });
+            console.log(`📉 Frontend compressed: ${(file.size / 1024 / 1024).toFixed(2)}MB → ${(compressedFile.size / 1024 / 1024).toFixed(2)}MB`);
+            resolve(compressedFile);
+          },
+          'image/jpeg',
+          quality
+        );
+      };
+      img.onerror = () => reject(new Error('Failed to load image'));
+      img.src = e.target.result;
+    };
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
 function App() {
   const [token, setToken] = useState(localStorage.getItem('token') || null);
   const [user, setUser] = useState(null);
@@ -82,7 +134,6 @@ function App() {
   const [selectedReceiptIds, setSelectedReceiptIds] = useState(new Set());
   const [viewModal, setViewModal] = useState(null);
 
-  // Счётчики
   const receiptCount = receipts.filter(r => r.document_type === 'receipt' || !r.document_type).length;
   const invoiceCount = receipts.filter(r => r.document_type === 'invoice').length;
 
@@ -214,8 +265,16 @@ function App() {
     setLastSavedReceipt(null);
     try {
       const file = selectedFiles[currentFileIndex];
+
+      // ====== COMPRESS BEFORE UPLOAD ======
+      let fileToUpload = file;
+      if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+        console.log(`📦 File too large (${(file.size / 1024 / 1024).toFixed(1)}MB), compressing...`);
+        fileToUpload = await compressImageFile(file);
+      }
+
       const formData = new FormData();
-      formData.append('image', file);
+      formData.append('image', fileToUpload);
       formData.append('model', selectedModel);
       formData.append('currency', currency);
       formData.append('docType', docType);
@@ -475,7 +534,6 @@ function App() {
         </button>
       </nav>
 
-      {/* VIEW MODAL */}
       {viewModal && (
         <div className="modal-overlay" onClick={() => setViewModal(null)}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
@@ -526,7 +584,6 @@ function App() {
         </div>
       )}
 
-      {/* UPLOAD TAB */}
       {activeTab === 'upload' && (
         <div className="upload-section">
           <div className="top-controls">
@@ -564,6 +621,12 @@ function App() {
                       <span>{currentFileIndex + 1} / {selectedFiles.length}</span>
                       <button onClick={(e) => {e.preventDefault(); nextFile();}} disabled={currentFileIndex === selectedFiles.length - 1}>▶</button>
                     </div>
+                  )}
+                  {selectedFiles[currentFileIndex] && (
+                    <p style={{ fontSize: 12, color: '#7f8c8d', marginTop: 5 }}>
+                      Размер: {(selectedFiles[currentFileIndex].size / 1024 / 1024).toFixed(2)} MB
+                      {selectedFiles[currentFileIndex].size > MAX_FILE_SIZE_MB * 1024 * 1024 && ' (будет сжато)'}
+                    </p>
                   )}
                 </div>
               ) : (
@@ -646,7 +709,6 @@ function App() {
         </div>
       )}
 
-      {/* LIST TAB */}
       {activeTab === 'list' && (
         <div className="list-section">
           <div className="filters" style={{ flexWrap: 'wrap', gap: '10px' }}>
@@ -667,7 +729,6 @@ function App() {
             <button onClick={() => loadReceipts()}>🔄 Обновить</button>
           </div>
 
-          {/* Bulk actions */}
           {selectedReceiptIds.size > 0 && (
             <div style={{ background: '#fff3cd', padding: '12px 15px', borderRadius: 8, marginBottom: 15, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
               <span>✅ Выбрано: <strong>{selectedReceiptIds.size}</strong></span>
@@ -689,7 +750,6 @@ function App() {
             </div>
           )}
 
-          {/* Select all */}
           <div style={{ marginBottom: 10 }}>
             <label style={{ cursor: 'pointer', fontSize: 14 }}>
               <input type="checkbox" onChange={(e) => e.target.checked ? selectAllVisible() : deselectAll()} style={{ marginRight: 6 }} />
@@ -706,18 +766,11 @@ function App() {
               <div className="receipts-grid">
                 {paginatedReceipts.map(receipt => (
                   <div key={receipt.id} className="receipt-card">
-                    {/* ИСПРАВЛЕНО: чекбокс в шапке, не перекрывает текст */}
                     <div className="receipt-header" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, paddingTop: 2 }}>
-                      <input
-                        type="checkbox"
-                        checked={selectedReceiptIds.has(receipt.id)}
-                        onChange={() => toggleSelect(receipt.id)}
-                        style={{ width: 20, height: 20, cursor: 'pointer', flexShrink: 0, marginTop: 2 }}
-                      />
+                      <input type="checkbox" checked={selectedReceiptIds.has(receipt.id)} onChange={() => toggleSelect(receipt.id)} style={{ width: 20, height: 20, cursor: 'pointer', flexShrink: 0, marginTop: 2 }} />
                       <h3 style={{ margin: 0, flex: 1, lineHeight: 1.3 }}>{receipt.store_name_ru || receipt.store_name || 'Без названия'}</h3>
                       <span className="type-badge" style={{ flexShrink: 0 }}>{receipt.document_type}</span>
                     </div>
-
                     <p className="date">{formatDate(receipt.receipt_date)} {receipt.receipt_time}</p>
                     <p className="amount">{formatAmount(receipt.total_amount, receipt.currency)}</p>
                     <p className="items-count">🛒 {receipt.items?.length || 0} товаров</p>
@@ -735,7 +788,6 @@ function App() {
                 ))}
               </div>
 
-              {/* Pagination */}
               {itemsPerPage !== 'all' && totalPages > 1 && (
                 <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 10, marginTop: 20 }}>
                   <button onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} style={{ padding: '8px 16px', borderRadius: 6, border: 'none', background: currentPage === 1 ? '#ddd' : '#3498db', color: 'white', cursor: currentPage === 1 ? 'not-allowed' : 'pointer' }}>◀ Назад</button>
