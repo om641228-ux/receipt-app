@@ -64,10 +64,10 @@ function App() {
   const [previewUrl, setPreviewUrl] = useState(null);
   const [recognizing, setRecognizing] = useState(false);
   const [lastSavedReceipt, setLastSavedReceipt] = useState(null);
-  const [selectedModel, setSelectedModel] = useState('groq-llama-4-scout'); // ← пункт 5
-  const [currency, setCurrency] = useState('auto'); // ← пункт 7
+  const [selectedModel, setSelectedModel] = useState('groq-llama-4-scout');
+  const [currency, setCurrency] = useState('auto');
   const [docType, setDocType] = useState('receipt');
-  const [object, setObject] = useState('other'); // ← пункт 3
+  const [object, setObject] = useState('other');
   const [showModelSelector, setShowModelSelector] = useState(false);
 
   const [models, setModels] = useState(FALLBACK_MODELS);
@@ -81,6 +81,10 @@ function App() {
 
   const [selectedReceiptIds, setSelectedReceiptIds] = useState(new Set());
   const [viewModal, setViewModal] = useState(null);
+
+  // Счётчики
+  const receiptCount = receipts.filter(r => r.document_type === 'receipt' || !r.document_type).length;
+  const invoiceCount = receipts.filter(r => r.document_type === 'invoice').length;
 
   useEffect(() => {
     return () => { previewUrls.forEach(url => URL.revokeObjectURL(url)); };
@@ -286,9 +290,7 @@ function App() {
   const bulkExportPackage = async () => {
     if (selectedReceiptIds.size === 0) return alert('Выберите чеки');
     const ids = Array.from(selectedReceiptIds);
-    // 1. Excel
     await exportExcel(ids);
-    // 2. Photo + text for each
     const selected = receipts.filter(r => selectedReceiptIds.has(r.id));
     for (const r of selected) {
       if (r.raw_text) {
@@ -300,9 +302,7 @@ function App() {
         a.click();
         URL.revokeObjectURL(url);
       }
-      if (r.image_url) {
-        await downloadFile(r.image_url, `receipt_${r.id}_image.jpg`);
-      }
+      if (r.image_url) await downloadFile(r.image_url, `receipt_${r.id}_image.jpg`);
     }
   };
 
@@ -418,7 +418,6 @@ function App() {
     return colors[provider] || '#888';
   };
 
-  // Filtering
   const filteredReceipts = receipts.filter(r => {
     if (filterType !== 'all' && r.document_type !== filterType) return false;
     if (filterObject !== 'all' && r.object !== filterObject) return false;
@@ -427,7 +426,6 @@ function App() {
     return (r.store_name_ru || r.store_name || '').toLowerCase().includes(q) || (r.raw_text || '').toLowerCase().includes(q);
   });
 
-  // Pagination
   const totalPages = itemsPerPage === 'all' ? 1 : Math.ceil(filteredReceipts.length / itemsPerPage);
   const paginatedReceipts = itemsPerPage === 'all'
     ? filteredReceipts
@@ -472,7 +470,9 @@ function App() {
 
       <nav className="tabs">
         <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>📤 Загрузка</button>
-        <button className={activeTab === 'list' ? 'active' : ''} onClick={() => {setActiveTab('list'); loadReceipts();}}>📋 Чеки ({receipts.length})</button>
+        <button className={activeTab === 'list' ? 'active' : ''} onClick={() => {setActiveTab('list'); loadReceipts();}}>
+          📋 Чеки ({receiptCount}) · Фактуры ({invoiceCount})
+        </button>
       </nav>
 
       {/* VIEW MODAL */}
@@ -705,18 +705,23 @@ function App() {
             <>
               <div className="receipts-grid">
                 {paginatedReceipts.map(receipt => (
-                  <div key={receipt.id} className="receipt-card" style={{ position: 'relative' }}>
-                    <div style={{ position: 'absolute', top: 10, left: 10, zIndex: 2 }}>
-                      <input type="checkbox" checked={selectedReceiptIds.has(receipt.id)} onChange={() => toggleSelect(receipt.id)} style={{ width: 20, height: 20, cursor: 'pointer' }} />
+                  <div key={receipt.id} className="receipt-card">
+                    {/* ИСПРАВЛЕНО: чекбокс в шапке, не перекрывает текст */}
+                    <div className="receipt-header" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, paddingTop: 2 }}>
+                      <input
+                        type="checkbox"
+                        checked={selectedReceiptIds.has(receipt.id)}
+                        onChange={() => toggleSelect(receipt.id)}
+                        style={{ width: 20, height: 20, cursor: 'pointer', flexShrink: 0, marginTop: 2 }}
+                      />
+                      <h3 style={{ margin: 0, flex: 1, lineHeight: 1.3 }}>{receipt.store_name_ru || receipt.store_name || 'Без названия'}</h3>
+                      <span className="type-badge" style={{ flexShrink: 0 }}>{receipt.document_type}</span>
                     </div>
-                    <div className="receipt-header">
-                      <h3>{receipt.store_name_ru || receipt.store_name || 'Без названия'}</h3>
-                      <span className="type-badge">{receipt.document_type}</span>
-                    </div>
+
                     <p className="date">{formatDate(receipt.receipt_date)} {receipt.receipt_time}</p>
                     <p className="amount">{formatAmount(receipt.total_amount, receipt.currency)}</p>
                     <p className="items-count">🛒 {receipt.items?.length || 0} товаров</p>
-                    {receipt.object && <p style={{ fontSize: 12, color: '#7f8c8d' }}>🏢 {receipt.object}</p>}
+                    {receipt.object && <p style={{ fontSize: 12, color: '#7f8c8d', margin: '4px 0' }}>🏢 {receipt.object}</p>}
                     {receipt.image_url ? (
                       <img src={receipt.image_url} alt="Чек" className="receipt-thumb" onError={(e) => { e.target.style.display = 'none'; }} />
                     ) : (
