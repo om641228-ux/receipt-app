@@ -16,13 +16,11 @@ const PORT = process.env.PORT || 3000;
 
 const OBJECTS = ['other', 'Duqe', 'Maria', 'Kit', 'Dubai', 'Tich'];
 
-// ====== Multer ======
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 }
 });
 
-// ====== CORS ======
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -37,15 +35,12 @@ app.options('*', (req, res) => {
 });
 app.use(express.json({ limit: '50mb' }));
 
-// ====== Uploads (local temp) ======
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir));
 
-// ====== Auth ======
 app.use('/api', authOwners);
 
-// ====== IMAGE COMPRESSION ======
 async function compressImage(buffer, maxWidth = 1500, quality = 85) {
   try {
     const compressed = await sharp(buffer)
@@ -61,7 +56,6 @@ async function compressImage(buffer, maxWidth = 1500, quality = 85) {
   }
 }
 
-// ====== SUPABASE STORAGE HELPER (обязательный) ======
 async function uploadImageToSupabase(buffer, filename, contentType) {
   console.log('📤 Uploading to Supabase Storage:', filename);
   const { data, error } = await supabase.storage
@@ -78,7 +72,6 @@ async function uploadImageToSupabase(buffer, filename, contentType) {
   return publicUrl;
 }
 
-// ====== POST-PROCESSING ======
 function cleanItems(items) {
   if (!Array.isArray(items)) return [];
   const serviceNames = ['rounding','sub total','tax','total due','total','vat','prepayment','amount due','grand total'];
@@ -89,7 +82,7 @@ function cleanItems(items) {
   });
 }
 
-// ====== 1. GEMINI ======
+// ====== 1. GEMINI — с усиленным raw_text ======
 async function recognizeWithGemini(base64Image, mimeType, modelId, currency) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY не настроен');
@@ -107,6 +100,7 @@ async function recognizeWithGemini(base64Image, mimeType, modelId, currency) {
     ? `"currency": "${currency}"`
     : `"currency": "detect from store location (AED/EUR/USD/RUB)"`;
 
+  // ← ИЗМЕНЕНО: raw_text теперь обязан содержать ДОСЛОВНО весь текст с чека
   const prompt = `Ты — эксперт по распознаванию чеков. Проанализируй изображение чека и верни результат СТРОГО в формате JSON (без markdown, только чистый JSON).
 
 КРИТИЧЕСКИ ВАЖНО:
@@ -124,6 +118,12 @@ async function recognizeWithGemini(base64Image, mimeType, modelId, currency) {
 - Russia → RUB
 - Если не уверен — используй ${currency && currency !== 'auto' ? currency : 'AED как дефолт'}
 
+ПОЛЕ raw_text — ОБЯЗАТЕЛЬНЫЕ ТРЕБОВАНИЯ:
+- raw_text должен содержать ДОСЛОВНО ВЕСЬ текст, который виден на изображении чека
+- Перепиши текст с чека полностью, без сокращений, без пересказа, без обобщения
+- Сохрани все строки, цифры, названия товаров, цены, даты, адреса, телефоны — всё как есть
+- НЕ пиши свое резюме или описание — только то, что напечатано на чеке
+
 Структура JSON:
 {
   "store_name": "название магазина",
@@ -138,7 +138,7 @@ async function recognizeWithGemini(base64Image, mimeType, modelId, currency) {
   "items": [
     {"name": "WARRE'S WARRIOR 75CL", "name_ru": "Виски WARRE'S WARRIOR 0.75л", "quantity": 2, "price": 79.12, "total": 158.24}
   ],
-  "raw_text": "полный текст чека"
+  "raw_text": "ДОСЛОВНО ВЕСЬ ТЕКСТ С ЧЕКА. Каждая строка. Все названия. Все цифры. Без сокращений."
 }
 
 Если поле не найдено — используй null. НО items ДОЛЖЕН быть массивом, даже пустым [].`;
@@ -167,7 +167,7 @@ async function recognizeWithGemini(base64Image, mimeType, modelId, currency) {
   }
 }
 
-// ====== 2. GROQ ======
+// ====== 2. GROQ — с усиленным raw_text ======
 async function recognizeWithGroq(base64Image, mimeType, modelId, currency) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) throw new Error('GROQ_API_KEY не настроен');
@@ -193,6 +193,7 @@ async function recognizeWithGroq(base64Image, mimeType, modelId, currency) {
     ? `"currency": "${currency}"`
     : `"currency": "detect from store location (AED/EUR/USD/RUB)"`;
 
+  // ← ИЗМЕНЕНО: raw_text теперь обязан содержать ДОСЛОВНО весь текст с чека
   const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -201,7 +202,15 @@ async function recognizeWithGroq(base64Image, mimeType, modelId, currency) {
       messages: [{
         role: 'user',
         content: [
-          { type: 'text', text: `Проанализируй этот чек. ВАЖНО: название товара — это РЕАЛЬНОЕ название продукта, НЕ "2 EACH" или код товара. Не включай "Rounding", "Sub Total", "Tax" как товары. Определи валюту по стране/адресу магазина (UAE→AED, Europe→EUR, USA→USD, Russia→RUB). Верни СТРОГО в JSON: {store_name, store_name_ru, receipt_date, receipt_time, total_amount, subtotal, tax_amount, tax_rate, ${currencyBlock}, items:[{name, name_ru, quantity, price, total}], raw_text}` },
+          { type: 'text', text: `Проанализируй этот чек. ВАЖНО: название товара — это РЕАЛЬНОЕ название продукта, НЕ "2 EACH" или код товара. Не включай "Rounding", "Sub Total", "Tax" как товары. Определи валюту по стране/адресу магазина (UAE→AED, Europe→EUR, USA→USD, Russia→RUB).
+
+КРИТИЧЕСКИ ВАЖНО ПОЛЕ raw_text:
+- raw_text должен содержать ДОСЛОВНО ВЕСЬ текст, который напечатан на чеке
+- Перепиши каждую строку с чека полностью, без сокращений, без пересказа, без обобщения
+- Сохрани все названия товаров, цены, количества, даты, адреса, телефоны — всё как есть на изображении
+- НЕ пиши свое резюме или описание — только то, что видно на чеке
+
+Верни СТРОГО в JSON: {store_name, store_name_ru, receipt_date, receipt_time, total_amount, subtotal, tax_amount, tax_rate, ${currencyBlock}, items:[{name, name_ru, quantity, price, total}], raw_text}` },
           { type: 'image_url', image_url: { url: dataUrl } }
         ]
       }],
@@ -232,7 +241,7 @@ async function recognizeWithGroq(base64Image, mimeType, modelId, currency) {
   }
 }
 
-// ====== 3. OCR.SPACE ======
+// ====== 3. OCR.SPACE — raw_text уже полный из API ======
 async function recognizeWithOCRSpace(buffer, modelId, currency) {
   const apiKey = process.env.OCRSPACE_API_KEY;
   if (!apiKey) throw new Error('OCRSPACE_API_KEY не настроен');
@@ -290,11 +299,10 @@ async function recognizeWithOCRSpace(buffer, modelId, currency) {
     tax_rate: data.tax_rate || null,
     currency: data.currency || (currency && currency !== 'auto' ? currency : 'AED'),
     items: data.items || [],
-    raw_text: parsedText
+    raw_text: parsedText // ← OCR.space уже даёт полный текст
   };
 }
 
-// ====== OCR PARSING HELPERS ======
 function parseOCRText(fullText, defaultCurrency) {
   const data = { store_name: '', store_name_ru: '', date: null, time: null, total: 0, subtotal: 0, tax: 0, tax_rate: null, currency: detectCurrency(fullText, defaultCurrency), items: [] };
   const lines = fullText.split('\n').map(l => l.trim()).filter(l => l);
@@ -368,7 +376,6 @@ function translateToRussian(text) {
   return translations[text] || text;
 }
 
-// ====== LIST MODELS ======
 app.get('/api/list-gemini-models', (req, res) => {
   res.json({ models: [
     { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
@@ -397,8 +404,6 @@ app.get('/api/list-ocrspace-models', (req, res) => {
   ]});
 });
 
-// ====== CORE ROUTES ======
-
 app.get('/api/receipts', authOwners.requireAuth, authOwners.scopeReceiptsByOwner, async (req, res) => {
   try {
     const { data, error } = await supabase.from('receipts').select('*').order('created_at', { ascending: false });
@@ -409,7 +414,6 @@ app.get('/api/receipts', authOwners.requireAuth, authOwners.scopeReceiptsByOwner
   }
 });
 
-// ====== DELETE ======
 app.delete('/api/receipts/:id', authOwners.requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
@@ -427,7 +431,6 @@ app.delete('/api/receipts/:id', authOwners.requireAuth, async (req, res) => {
   }
 });
 
-// ====== BULK DELETE ======
 app.post('/api/bulk-delete', authOwners.requireAuth, async (req, res) => {
   try {
     const { ids } = req.body;
@@ -447,7 +450,6 @@ app.post('/api/bulk-delete', authOwners.requireAuth, async (req, res) => {
   }
 });
 
-// ====== BULK UPDATE OBJECT ======
 app.post('/api/bulk-update-object', authOwners.requireAuth, async (req, res) => {
   try {
     const { ids, object } = req.body;
@@ -461,7 +463,6 @@ app.post('/api/bulk-update-object', authOwners.requireAuth, async (req, res) => 
   }
 });
 
-// ====== BULK UPDATE CURRENCY ======
 app.post('/api/bulk-update-currency', authOwners.requireAuth, async (req, res) => {
   try {
     const { ids, currency } = req.body;
@@ -504,7 +505,6 @@ function validateDate(dateStr) {
   return null;
 }
 
-// ====== MODEL MAPPING ======
 const MODEL_MAP = {
   'gemini-2.5-flash': 'gemini-2.5-flash', 'gemini-2.5-flash-image': 'gemini-2.5-flash-image',
   'gemini-2.5-flash-lite': 'gemini-2.5-flash-lite', 'gemini-2.5-pro': 'gemini-2.5-pro',
@@ -546,7 +546,6 @@ function getProvider(modelName) {
   return 'unknown';
 }
 
-// ====== UPLOAD & RECOGNIZE ======
 app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
   console.log('>>> /api/upload-receipt called');
   try {
@@ -561,7 +560,6 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     const ext = path.extname(file.originalname) || '.jpg';
     const savedName = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}${ext}`;
 
-    // 1. Supabase Storage (обязательно)
     let imageUrl;
     try {
       imageUrl = await uploadImageToSupabase(file.buffer, savedName, file.mimetype);
@@ -569,14 +567,11 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
       return res.status(500).json({ success: false, error: 'Failed to upload image: ' + storageErr.message });
     }
 
-    // 2. Local temp for AI
     fs.writeFileSync(path.join(uploadsDir, savedName), file.buffer);
 
-    // 3. Compress for AI
     const compressedBuffer = await compressImage(file.buffer, 1500, 85);
     const base64Image = compressedBuffer.toString('base64');
 
-    // 4. Recognize
     let recognized = null;
     let recognitionMethod = model || 'manual';
     let recognitionError = null;
@@ -662,10 +657,8 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
   }
 });
 
-// ====== EXPORT EXCEL ======
 app.post('/api/export-excel', authOwners.requireAuth, require('./export-excel'));
 
-// ====== TEST STORAGE ======
 app.get('/api/test-storage', async (req, res) => {
   try {
     const testBuffer = Buffer.from('test');
@@ -680,7 +673,6 @@ app.get('/api/test-storage', async (req, res) => {
   }
 });
 
-// ====== OPTIONAL MODULES ======
 function tryRequire(modulePath, routePath) {
   try {
     const mod = require(modulePath);
@@ -701,7 +693,6 @@ tryRequire('./reprocess-receipt', '/api/reprocess-receipt');
 tryRequire('./update-receipt-object', '/api/update-receipt-object');
 tryRequire('./update-receipt-currency', '/api/update-receipt-currency');
 
-// ====== Health ======
 app.get('/', (req, res) => res.json({ status: 'ok', message: 'Receipt Manager API', timestamp: new Date().toISOString() }));
 app.get('/api/health', (req, res) => res.json({
   status: 'ok',
