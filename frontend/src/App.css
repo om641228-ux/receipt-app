@@ -875,3 +875,56 @@ body {
 .structured-raw::-webkit-scrollbar-thumb:hover {
   background: #a8a8a8;
 }
+/* ====== STRUCTURED RAW TEXT STYLES ====== */
+/* Убираем старый тёмный стиль pre.raw-text */
+pre.raw-text {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  margin: 0;
+  border: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+}
+
+/* Новый читаемый блок */
+.raw-text-readable {
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  padding: 14px 16px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: #212529;
+  max-height: 450px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.raw-text-line {
+  padding: 3px 0;
+  border-bottom: 1px solid #f1f3f5;
+}
+
+.raw-text-line:last-child {
+  border-bottom: none;
+}
+
+/* Скроллбар */
+.raw-text-readable::-webkit-scrollbar {
+  width: 8px;
+}
+.raw-text-readable::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+.raw-text-readable::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 4px;
+}
+.raw-text-readable::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
+}
