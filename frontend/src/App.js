@@ -1,11 +1,13 @@
-// App.js
+//
+//
+//
 import React, { useState, useEffect, useCallback } from 'react';
 import './App.css';
 
 const API_URL = 'https://backend-production-adc7.up.railway.app';
 const OBJECTS = ['other', 'Duqe', 'Maria', 'Kit', 'Dubai', 'Tich'];
-const ITEMS_PER_PAGE_OPTIONS = ['10', '20', '50', 'all'];
-const MAX_FILE_SIZE_MB = 2;
+const ITEMS_PER_PAGE_OPTIONS = [10, 20, 50, 'all'];
+const MAX_FILE_SIZE_MB = 2; // если больше — сжимаем через Canvas
 
 const fixImageUrl = (url) => {
   if (!url) return null;
@@ -50,32 +52,20 @@ const FALLBACK_MODELS = [
   { name: 'groq-gemma', displayName: 'Groq Gemma', provider: 'Groq' },
 ];
 
-function formatRawText(raw) {
-  if (!raw) return '';
-  if (typeof raw === 'string') {
-    try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed.join('\n');
-      if (typeof parsed === 'object') return JSON.stringify(parsed, null, 2);
-      return String(parsed);
-    } catch {
-      return raw;
-    }
-  }
-  if (Array.isArray(raw)) return raw.join('\n');
-  return String(raw);
-}
-
+// ====== FRONTEND IMAGE COMPRESSION ======
 function compressImageFile(file, maxWidth = 1600, maxHeight = 2400, quality = 0.85) {
   return new Promise((resolve, reject) => {
     if (file.size <= MAX_FILE_SIZE_MB * 1024 * 1024) {
+      // Маленький файл — не сжимаем
       return resolve(file);
     }
+
     const reader = new FileReader();
     reader.onload = (e) => {
       const img = new Image();
       img.onload = () => {
         let { width, height } = img;
+        // Сохраняем пропорции
         if (width > maxWidth) {
           height = Math.round(height * (maxWidth / width));
           width = maxWidth;
@@ -84,11 +74,13 @@ function compressImageFile(file, maxWidth = 1600, maxHeight = 2400, quality = 0.
           width = Math.round(width * (maxHeight / height));
           height = maxHeight;
         }
+
         const canvas = document.createElement('canvas');
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, width, height);
+
         canvas.toBlob(
           (blob) => {
             if (!blob) return reject(new Error('Canvas toBlob failed'));
@@ -139,7 +131,7 @@ function App() {
   const [filterType, setFilterType] = useState('all');
   const [filterObject, setFilterObject] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [itemsPerPage, setItemsPerPage] = useState('20');
+  const [itemsPerPage, setItemsPerPage] = useState(20);
   const [currentPage, setCurrentPage] = useState(1);
 
   const [selectedReceiptIds, setSelectedReceiptIds] = useState(new Set());
@@ -194,11 +186,9 @@ function App() {
       const raw = Array.isArray(data) ? data : (data.receipts || []);
       const processed = raw.map(r => {
         let items = r.items;
-        if (typeof items === 'string') {
-          try { items = JSON.parse(items); } catch (e) { items = []; }
-        }
+        if (typeof items === 'string') { try { items = JSON.parse(items); } catch (e) { items = []; } }
         if (!Array.isArray(items)) items = [];
-        return { ...r, image_url: fixImageUrl(r.image_url), items, raw_text: r.raw_text || '' };
+        return { ...r, image_url: fixImageUrl(r.image_url), items: items, raw_text: r.raw_text || '' };
       });
       setReceipts(processed);
       setSelectedReceiptIds(new Set());
@@ -278,11 +268,14 @@ function App() {
     setLastSavedReceipt(null);
     try {
       const file = selectedFiles[currentFileIndex];
+
+      // ====== COMPRESS BEFORE UPLOAD ======
       let fileToUpload = file;
       if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
         console.log(`📦 File too large (${(file.size / 1024 / 1024).toFixed(1)}MB), compressing...`);
         fileToUpload = await compressImageFile(file);
       }
+
       const formData = new FormData();
       formData.append('image', fileToUpload);
       formData.append('model', selectedModel);
@@ -363,7 +356,7 @@ function App() {
     const selected = receipts.filter(r => selectedReceiptIds.has(r.id));
     for (const r of selected) {
       if (r.raw_text) {
-        const blob = new Blob([formatRawText(r.raw_text)], { type: 'text/plain' });
+        const blob = new Blob([r.raw_text], { type: 'text/plain' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -462,14 +455,7 @@ function App() {
           const res = await fetch(endpoint.url);
           if (res.ok) {
             const data = await res.json();
-            if (data.models) {
-              allModels = [...allModels, ...data.models.map(m => ({
-                name: m.id,
-                displayName: m.name || m.id,
-                provider: endpoint.provider,
-                status: 'ok'
-              }))];
-            }
+            if (data.models) allModels = [...allModels, ...data.models.map(m => ({ name: m.id, displayName: m.name || m.id, provider: endpoint.provider, status: 'ok' }))];
           }
         } catch (e) {}
       }
@@ -499,14 +485,13 @@ function App() {
     if (filterObject !== 'all' && r.object !== filterObject) return false;
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
-    return (r.store_name_ru || r.store_name || '').toLowerCase().includes(q) ||
-           (r.raw_text || '').toString().toLowerCase().includes(q);
+    return (r.store_name_ru || r.store_name || '').toLowerCase().includes(q) || (r.raw_text || '').toLowerCase().includes(q);
   });
 
-  const totalPages = itemsPerPage === 'all' ? 1 : Math.ceil(filteredReceipts.length / parseInt(itemsPerPage));
+  const totalPages = itemsPerPage === 'all' ? 1 : Math.ceil(filteredReceipts.length / itemsPerPage);
   const paginatedReceipts = itemsPerPage === 'all'
     ? filteredReceipts
-    : filteredReceipts.slice((currentPage - 1) * parseInt(itemsPerPage), currentPage * parseInt(itemsPerPage));
+    : filteredReceipts.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   if (authChecking) {
     return (
@@ -524,13 +509,7 @@ function App() {
       <div className="App">
         <div className="login-box">
           <h1>🧾 Receipt Manager</h1>
-          <input
-            type="password"
-            placeholder="Введите пароль"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && login()}
-          />
+          <input type="password" placeholder="Введите пароль" value={password} onChange={e => setPassword(e.target.value)} onKeyPress={e => e.key === 'Enter' && login()} />
           <button onClick={login}>Войти</button>
           {loginError && <p className="error">{loginError}</p>}
           <p className="hint">Пароли: admin, user1-user20</p>
@@ -567,11 +546,7 @@ function App() {
             </div>
             <div className="modal-body">
               <div className="modal-image-section">
-                {viewModal.image_url ? (
-                  <img src={viewModal.image_url} alt="Чек" className="modal-image" />
-                ) : (
-                  <div className="no-image">Нет фото</div>
-                )}
+                {viewModal.image_url ? <img src={viewModal.image_url} alt="Чек" className="modal-image" /> : <div className="no-image">Нет фото</div>}
               </div>
               <div className="modal-info">
                 <div className="info-block">
@@ -588,18 +563,10 @@ function App() {
                 <div className="info-block">
                   <h3>Товары ({viewModal.items?.length || 0})</h3>
                   <table className="items-table">
-                    <thead>
-                      <tr><th>№</th><th>Товар</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr>
-                    </thead>
+                    <thead><tr><th>№</th><th>Товар</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead>
                     <tbody>
                       {(viewModal.items || []).map((item, i) => (
-                        <tr key={i}>
-                          <td>{i + 1}</td>
-                          <td>{item.name_ru || item.name || '—'}</td>
-                          <td>{item.quantity}</td>
-                          <td>{item.price}</td>
-                          <td>{item.total}</td>
-                        </tr>
+                        <tr key={i}><td>{i + 1}</td><td>{item.name_ru || item.name || '—'}</td><td>{item.quantity}</td><td>{item.price}</td><td>{item.total}</td></tr>
                       ))}
                     </tbody>
                   </table>
@@ -607,11 +574,7 @@ function App() {
                 {viewModal.raw_text && (
                   <div className="info-block">
                     <h3>Распознанный текст</h3>
-                    <div className="raw-text-readable">
-                      {formatRawText(viewModal.raw_text).split('\n').map((line, i) => (
-                        <div key={i} className="raw-text-line">{line}</div>
-                      ))}
-                    </div>
+                    <pre className="raw-text">{viewModal.raw_text}</pre>
                   </div>
                 )}
               </div>
@@ -635,12 +598,8 @@ function App() {
                 {modelsLoading ? <p>Загрузка...</p> : (
                   <div className="models-grid">
                     {models.map(model => (
-                      <div
-                        key={`${model.provider}-${model.name}`}
-                        className={`model-option ${selectedModel === model.name ? 'selected' : ''}`}
-                        onClick={() => { setSelectedModel(model.name); setShowModelSelector(false); }}
-                        title={`${model.provider} — ${model.displayName}`}
-                      >
+                      <div key={`${model.provider}-${model.name}`} className={`model-option ${selectedModel === model.name ? 'selected' : ''}`}
+                           onClick={() => { setSelectedModel(model.name); setShowModelSelector(false); }} title={`${model.provider} — ${model.displayName}`}>
                         <span className="provider-badge" style={{ backgroundColor: getProviderColor(model.provider) }}>{model.provider}</span>
                         <span className="model-name">{model.displayName}</span>
                         <span className="status-ok">✅</span>
@@ -719,11 +678,7 @@ function App() {
             <div className="saved-receipt-card">
               <h3>✅ Чек сохранён</h3>
               <div className="receipt-preview">
-                {lastSavedReceipt.image_url ? (
-                  <img src={lastSavedReceipt.image_url} alt="Чек" className="receipt-image" />
-                ) : (
-                  <div className="no-image-thumb" style={{width:250,height:200}}>📄 Нет фото</div>
-                )}
+                {lastSavedReceipt.image_url ? <img src={lastSavedReceipt.image_url} alt="Чек" className="receipt-image" /> : <div className="no-image-thumb" style={{width:250,height:200}}>📄 Нет фото</div>}
                 <div className="receipt-info">
                   <p><strong>ID:</strong> {lastSavedReceipt.id}</p>
                   <p><strong>Магазин:</strong> {lastSavedReceipt.store_name_ru || lastSavedReceipt.store_name || '—'}</p>
@@ -746,11 +701,7 @@ function App() {
                   {lastSavedReceipt.raw_text && (
                     <details>
                       <summary>Распознанный текст</summary>
-                      <div className="raw-text-readable" style={{marginTop:10}}>
-                        {formatRawText(lastSavedReceipt.raw_text).split('\n').map((line, i) => (
-                          <div key={i} className="raw-text-line">{line}</div>
-                        ))}
-                      </div>
+                      <pre style={{fontSize:'11px',maxHeight:200,overflow:'auto'}}>{lastSavedReceipt.raw_text}</pre>
                     </details>
                   )}
                 </div>
@@ -774,7 +725,7 @@ function App() {
               {OBJECTS.map(o => <option key={o} value={o}>{o}</option>)}
             </select>
             <input type="text" placeholder="Поиск..." value={searchQuery} onChange={e => {setSearchQuery(e.target.value); setCurrentPage(1);}} />
-            <select value={itemsPerPage} onChange={e => {setItemsPerPage(e.target.value); setCurrentPage(1);}}>
+            <select value={itemsPerPage} onChange={e => {setItemsPerPage(e.target.value === 'all' ? 'all' : parseInt(e.target.value)); setCurrentPage(1);}}>
               {ITEMS_PER_PAGE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt === 'all' ? 'Все' : opt}</option>)}
             </select>
             <button onClick={() => exportExcel()}>📥 Excel (все)</button>
@@ -819,12 +770,7 @@ function App() {
                 {paginatedReceipts.map(receipt => (
                   <div key={receipt.id} className="receipt-card">
                     <div className="receipt-header" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, paddingTop: 2 }}>
-                      <input
-                        type="checkbox"
-                        checked={selectedReceiptIds.has(receipt.id)}
-                        onChange={() => toggleSelect(receipt.id)}
-                        style={{ width: 20, height: 20, cursor: 'pointer', flexShrink: 0, marginTop: 2 }}
-                      />
+                      <input type="checkbox" checked={selectedReceiptIds.has(receipt.id)} onChange={() => toggleSelect(receipt.id)} style={{ width: 20, height: 20, cursor: 'pointer', flexShrink: 0, marginTop: 2 }} />
                       <h3 style={{ margin: 0, flex: 1, lineHeight: 1.3 }}>{receipt.store_name_ru || receipt.store_name || 'Без названия'}</h3>
                       <span className="type-badge" style={{ flexShrink: 0 }}>{receipt.document_type}</span>
                     </div>
@@ -859,5 +805,5 @@ function App() {
     </div>
   );
 }
-
+//
 export default App;
