@@ -175,6 +175,13 @@ function App() {
   const [selectedReceiptIds, setSelectedReceiptIds] = useState(new Set());
   const [viewModal, setViewModal] = useState(null);
 
+  // === ПАКЕТНАЯ ЗАГРУЗКА ПАПКИ ===
+  const [folderUploading, setFolderUploading] = useState(false);
+  const [folderCurrent, setFolderCurrent] = useState(0);
+  const [folderTotal, setFolderTotal] = useState(0);
+  const [folderResults, setFolderResults] = useState([]);
+  const [folderErrors, setFolderErrors] = useState([]);
+
   const receiptCount = receipts.filter(r => r.document_type === 'receipt' || !r.document_type).length;
   const invoiceCount = receipts.filter(r => r.document_type === 'invoice').length;
 
@@ -299,6 +306,65 @@ function App() {
       setCurrentFileIndex(currentFileIndex - 1);
       setPreviewUrl(previewUrls[currentFileIndex - 1]);
       setLastSavedReceipt(null);
+    }
+  };
+
+  // ====== ОБРАБОТКА ПАПКИ ======
+  const handleFolderSelect = (e) => {
+    const files = Array.from(e.target.files).filter(f => f.type.startsWith('image/'));
+    if (files.length === 0) return;
+    // Сортируем по имени для предсказуемости
+    files.sort((a, b) => a.name.localeCompare(b.name));
+    setFolderResults([]);
+    setFolderErrors([]);
+    setFolderTotal(files.length);
+    setFolderCurrent(0);
+    setFolderUploading(true);
+    processFolderFiles(files);
+  };
+
+  const processFolderFiles = async (files) => {
+    const results = [];
+    const errors = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      setFolderCurrent(i + 1);
+      try {
+        let fileToUpload = file;
+        if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+          try {
+            fileToUpload = await compressImageFile(file);
+          } catch (compressErr) {
+            console.warn('Compression failed, using original:', compressErr);
+          }
+        }
+        const formData = new FormData();
+        formData.append('image', fileToUpload);
+        formData.append('model', selectedModel);
+        formData.append('currency', currency);
+        formData.append('docType', docType);
+        formData.append('object', object);
+
+        const res = await fetch(`${API_URL}/api/upload-receipt?token=${token}`, { method: 'POST', body: formData });
+        const text = await res.text();
+        let data;
+        try { data = JSON.parse(text); } catch { throw new Error(`Сервер вернул ${res.status}`); }
+        if (!res.ok || (!data.success && !data.id)) throw new Error(data.error || 'Ошибка сервера');
+
+        const receiptData = data.data || data;
+        if (receiptData.image_url) receiptData.image_url = fixImageUrl(receiptData.image_url);
+        results.push(receiptData);
+      } catch (err) {
+        console.error(`Ошибка файла ${file.name}:`, err);
+        errors.push({ name: file.name, error: err.message });
+      }
+    }
+    setFolderResults(results);
+    setFolderErrors(errors);
+    setFolderUploading(false);
+    loadReceipts();
+    if (results.length > 0) {
+      setLastSavedReceipt(results[results.length - 1]);
     }
   };
 
@@ -719,6 +785,16 @@ function App() {
 
           <div className="drop-zone" onDrop={handleDrop} onDragOver={e => e.preventDefault()}>
             <input type="file" accept="image/*" multiple onChange={handleFileSelect} id="file-input" />
+            <input
+              type="file"
+              accept="image/*"
+              webkitdirectory="true"
+              directory="true"
+              multiple
+              onChange={handleFolderSelect}
+              id="folder-input"
+              style={{ display: 'none' }}
+            />
             <label htmlFor="file-input">
               {previewUrl ? (
                 <div className="preview-container">
@@ -747,6 +823,96 @@ function App() {
             </label>
           </div>
 
+          {/* Кнопка выбора папки */}
+          <div style={{ marginBottom: 20, textAlign: 'center' }}>
+            <label htmlFor="folder-input" style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '12px 24px',
+              background: '#2c3e50',
+              color: 'white',
+              borderRadius: 8,
+              cursor: 'pointer',
+              fontSize: 14,
+              fontWeight: 500
+            }}>
+              📁 Выбрать папку и распознать все
+            </label>
+            <p style={{ fontSize: 12, color: '#95a5a6', marginTop: 6 }}>
+              (Chrome, Edge, Safari на Mac — выбор папки с автоматической обработкой всех фото)
+            </p>
+          </div>
+
+          {/* Прогресс пакетной обработки */}
+          {folderUploading && (
+            <div style={{
+              background: '#eaf2f8',
+              border: '2px solid #3498db',
+              borderRadius: 12,
+              padding: 20,
+              marginBottom: 20,
+              textAlign: 'center'
+            }}>
+              <div className="spinner" style={{ margin: '0 auto 15px' }}></div>
+              <p style={{ fontSize: 16, fontWeight: 'bold', color: '#2c3e50', margin: '0 0 8px' }}>
+                Обработка папки...
+              </p>
+              <p style={{ fontSize: 14, color: '#5d6d7e', margin: 0 }}>
+                {folderCurrent} из {folderTotal} файлов
+              </p>
+              <div style={{
+                width: '100%',
+                height: 8,
+                background: '#ddd',
+                borderRadius: 4,
+                marginTop: 12,
+                overflow: 'hidden'
+              }}>
+                <div style={{
+                  width: `${folderTotal > 0 ? (folderCurrent / folderTotal) * 100 : 0}%`,
+                  height: '100%',
+                  background: '#3498db',
+                  transition: 'width 0.3s'
+                }}></div>
+              </div>
+            </div>
+          )}
+
+          {!folderUploading && folderResults.length > 0 && (
+            <div style={{
+              background: '#d4edda',
+              border: '2px solid #27ae60',
+              borderRadius: 12,
+              padding: 20,
+              marginBottom: 20
+            }}>
+              <h3 style={{ margin: '0 0 10px', color: '#27ae60' }}>✅ Папка обработана</h3>
+              <p style={{ margin: '0 0 8px', fontSize: 14 }}>
+                Успешно: <strong>{folderResults.length}</strong> · Ошибок: <strong>{folderErrors.length}</strong>
+              </p>
+              {folderErrors.length > 0 && (
+                <details style={{ marginTop: 10 }}>
+                  <summary style={{ color: '#e74c3c', fontSize: 13, cursor: 'pointer' }}>
+                    Ошибки ({folderErrors.length})
+                  </summary>
+                  <ul style={{ fontSize: 12, color: '#e74c3c', marginTop: 8 }}>
+                    {folderErrors.map((err, i) => (
+                      <li key={i}>{err.name}: {err.error}</li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+              <button
+                className="close-btn"
+                style={{ marginTop: 15 }}
+                onClick={() => { setFolderResults([]); setFolderErrors([]); }}
+              >
+                Закрыть сводку
+              </button>
+            </div>
+          )}
+
           <div className="controls-row">
             <div className="control-group">
               <label>Валюта:</label>
@@ -774,12 +940,12 @@ function App() {
           </div>
 
           <div className="recognize-bar">
-            <button className="recognize-main-btn" onClick={recognizeAndSave} disabled={!selectedFiles.length || recognizing}>
+            <button className="recognize-main-btn" onClick={recognizeAndSave} disabled={!selectedFiles.length || recognizing || folderUploading}>
               {recognizing ? '⏳ Распознавание...' : '🔍 Распознать и сохранить'}
             </button>
           </div>
 
-          {lastSavedReceipt && (
+          {lastSavedReceipt && !folderUploading && (
             <div className="saved-receipt-card">
               <h3>✅ Чек сохранён</h3>
               <div className="receipt-preview">
