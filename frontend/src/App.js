@@ -101,43 +101,43 @@ function compressImageFile(file, maxWidth = 1600, maxHeight = 2400, quality = 0.
     if (file.size <= MAX_FILE_SIZE_MB * 1024 * 1024) {
       return resolve(file);
     }
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const img = new Image();
-      img.onload = () => {
-        let { width, height } = img;
-        if (width > maxWidth) {
-          height = Math.round(height * (maxWidth / width));
-          width = maxWidth;
-        }
-        if (height > maxHeight) {
-          width = Math.round(width * (maxHeight / height));
-          height = maxHeight;
-        }
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, width, height);
-        canvas.toBlob(
-          (blob) => {
-            if (!blob) return reject(new Error('Canvas toBlob failed'));
-            const compressedFile = new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), {
-              type: 'image/jpeg',
-              lastModified: Date.now()
-            });
-            console.log(`📉 Frontend compressed: ${(file.size / 1024 / 1024).toFixed(2)}MB → ${(compressedFile.size / 1024 / 1024).toFixed(2)}MB`);
-            resolve(compressedFile);
-          },
-          'image/jpeg',
-          quality
-        );
-      };
-      img.onerror = () => reject(new Error('Failed to load image'));
-      img.src = e.target.result;
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let { width, height } = img;
+      if (width > maxWidth) {
+        height = Math.round(height * (maxWidth / width));
+        width = maxWidth;
+      }
+      if (height > maxHeight) {
+        width = Math.round(width * (maxHeight / height));
+        height = maxHeight;
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) return reject(new Error('Canvas toBlob failed'));
+          const compressedFile = new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), {
+            type: 'image/jpeg',
+            lastModified: Date.now()
+          });
+          console.log(`📉 Frontend compressed: ${(file.size / 1024 / 1024).toFixed(2)}MB → ${(compressedFile.size / 1024 / 1024).toFixed(2)}MB`);
+          resolve(compressedFile);
+        },
+        'image/jpeg',
+        quality
+      );
     };
-    reader.onerror = () => reject(new Error('Failed to read file'));
-    reader.readAsDataURL(file);
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Failed to load image'));
+    };
+    img.src = url;
   });
 }
 
@@ -310,8 +310,13 @@ function App() {
       const file = selectedFiles[currentFileIndex];
       let fileToUpload = file;
       if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-        console.log(`📦 File too large (${(file.size / 1024 / 1024).toFixed(1)}MB), compressing...`);
-        fileToUpload = await compressImageFile(file);
+        try {
+          console.log(`📦 File too large (${(file.size / 1024 / 1024).toFixed(1)}MB), compressing...`);
+          fileToUpload = await compressImageFile(file);
+        } catch (compressErr) {
+          console.warn('Compression failed, using original:', compressErr);
+          fileToUpload = file;
+        }
       }
       const formData = new FormData();
       formData.append('image', fileToUpload);
