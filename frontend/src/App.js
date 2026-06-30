@@ -1,10 +1,12 @@
+//
+//
 import React, { useState, useEffect, useCallback } from 'react';
 import './App.css';
 
 const API_URL = 'https://backend-production-adc7.up.railway.app';
 const OBJECTS = ['other', 'Duqe', 'Maria', 'Kit', 'Dubai', 'Tich'];
-const ITEMS_PER_PAGE_OPTIONS = ['10', '20', '50', 'all'];
-const MAX_FILE_SIZE_MB = 2;
+const ITEMS_PER_PAGE_OPTIONS = [10, 20, 50, 'all'];
+const MAX_FILE_SIZE_MB = 2; // если больше — сжимаем через Canvas
 
 const fixImageUrl = (url) => {
   if (!url) return null;
@@ -49,95 +51,54 @@ const FALLBACK_MODELS = [
   { name: 'groq-gemma', displayName: 'Groq Gemma', provider: 'Groq' },
 ];
 
-function formatRawText(raw) {
-  if (!raw) return '';
-  if (typeof raw === 'string') {
-    try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) return parsed.join('\n');
-      if (typeof parsed === 'object') return JSON.stringify(parsed, null, 2);
-      return String(parsed);
-    } catch {
-      return raw;
-    }
-  }
-  if (Array.isArray(raw)) return raw.join('\n');
-  return String(raw);
-}
-
-function generateRussianText(receipt) {
-  const lines = [];
-  lines.push(`Магазин: ${receipt.store_name_ru || receipt.store_name || '—'}`);
-  lines.push(`Дата: ${receipt.receipt_date || '—'} ${receipt.receipt_time || ''}`);
-  lines.push(`Тип документа: ${receipt.document_type === 'invoice' ? 'Фактура' : 'Чек'}`);
-  if (receipt.object && receipt.object !== 'other') lines.push(`Объект: ${receipt.object}`);
-  if (receipt.currency) lines.push(`Валюта: ${receipt.currency}`);
-  lines.push('');
-  lines.push('Товары:');
-  (receipt.items || []).forEach((item, i) => {
-    const name = item.name_ru || item.name || '—';
-    const qty = item.quantity ?? 1;
-    const price = item.price ?? '—';
-    const total = item.total ?? '—';
-    lines.push(`${i + 1}. ${name} — ${qty} × ${price} = ${total}`);
-  });
-  lines.push('');
-  lines.push(`Итого по чеку: ${receipt.total_amount ?? '—'} ${receipt.currency || ''}`);
-  if (receipt.subtotal) lines.push(`Подытог: ${receipt.subtotal}`);
-  if (receipt.tax_amount) lines.push(`Налог: ${receipt.tax_amount} ${receipt.tax_rate ? `(${receipt.tax_rate})` : ''}`);
-  return lines.join('\n');
-}
-
-function calculateItemsSum(receipt) {
-  if (!receipt.items || !Array.isArray(receipt.items)) return 0;
-  return receipt.items.reduce((sum, item) => {
-    const total = parseFloat(item.total);
-    return sum + (isNaN(total) ? 0 : total);
-  }, 0);
-}
-
+// ====== FRONTEND IMAGE COMPRESSION ======
 function compressImageFile(file, maxWidth = 1600, maxHeight = 2400, quality = 0.85) {
   return new Promise((resolve, reject) => {
     if (file.size <= MAX_FILE_SIZE_MB * 1024 * 1024) {
+      // Маленький файл — не сжимаем
       return resolve(file);
     }
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      URL.revokeObjectURL(url);
-      let { width, height } = img;
-      if (width > maxWidth) {
-        height = Math.round(height * (maxWidth / width));
-        width = maxWidth;
-      }
-      if (height > maxHeight) {
-        width = Math.round(width * (maxHeight / height));
-        height = maxHeight;
-      }
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0, width, height);
-      canvas.toBlob(
-        (blob) => {
-          if (!blob) return reject(new Error('Canvas toBlob failed'));
-          const compressedFile = new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), {
-            type: 'image/jpeg',
-            lastModified: Date.now()
-          });
-          console.log(`📉 Frontend compressed: ${(file.size / 1024 / 1024).toFixed(2)}MB → ${(compressedFile.size / 1024 / 1024).toFixed(2)}MB`);
-          resolve(compressedFile);
-        },
-        'image/jpeg',
-        quality
-      );
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        let { width, height } = img;
+        // Сохраняем пропорции
+        if (width > maxWidth) {
+          height = Math.round(height * (maxWidth / width));
+          width = maxWidth;
+        }
+        if (height > maxHeight) {
+          width = Math.round(width * (maxHeight / height));
+          height = maxHeight;
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) return reject(new Error('Canvas toBlob failed'));
+            const compressedFile = new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), {
+              type: 'image/jpeg',
+              lastModified: Date.now()
+            });
+            console.log(`📉 Frontend compressed: ${(file.size / 1024 / 1024).toFixed(2)}MB → ${(compressedFile.size / 1024 / 1024).toFixed(2)}MB`);
+            resolve(compressedFile);
+          },
+          'image/jpeg',
+          quality
+        );
+      };
+      img.onerror = () => reject(new Error('Failed to load image'));
+      img.src = e.target.result;
     };
-    img.onerror = () => {
-      URL.revokeObjectURL(url);
-      reject(new Error('Failed to load image'));
-    };
-    img.src = url;
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsDataURL(file);
   });
 }
 
@@ -169,18 +130,11 @@ function App() {
   const [filterType, setFilterType] = useState('all');
   const [filterObject, setFilterObject] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [itemsPerPage, setItemsPerPage] = useState('20');
+  const [itemsPerPage, setItemsPerPage] = useState(20);
   const [currentPage, setCurrentPage] = useState(1);
 
   const [selectedReceiptIds, setSelectedReceiptIds] = useState(new Set());
   const [viewModal, setViewModal] = useState(null);
-
-  // === ПАКЕТНАЯ ЗАГРУЗКА ПАПКИ ===
-  const [folderUploading, setFolderUploading] = useState(false);
-  const [folderCurrent, setFolderCurrent] = useState(0);
-  const [folderTotal, setFolderTotal] = useState(0);
-  const [folderResults, setFolderResults] = useState([]);
-  const [folderErrors, setFolderErrors] = useState([]);
 
   const receiptCount = receipts.filter(r => r.document_type === 'receipt' || !r.document_type).length;
   const invoiceCount = receipts.filter(r => r.document_type === 'invoice').length;
@@ -231,11 +185,9 @@ function App() {
       const raw = Array.isArray(data) ? data : (data.receipts || []);
       const processed = raw.map(r => {
         let items = r.items;
-        if (typeof items === 'string') {
-          try { items = JSON.parse(items); } catch (e) { items = []; }
-        }
+        if (typeof items === 'string') { try { items = JSON.parse(items); } catch (e) { items = []; } }
         if (!Array.isArray(items)) items = [];
-        return { ...r, image_url: fixImageUrl(r.image_url), items, raw_text: r.raw_text || '' };
+        return { ...r, image_url: fixImageUrl(r.image_url), items: items, raw_text: r.raw_text || '' };
       });
       setReceipts(processed);
       setSelectedReceiptIds(new Set());
@@ -309,81 +261,20 @@ function App() {
     }
   };
 
-  // ====== ОБРАБОТКА ПАПКИ ======
-  const handleFolderSelect = (e) => {
-    const files = Array.from(e.target.files).filter(f => f.type.startsWith('image/'));
-    if (files.length === 0) return;
-    // Сортируем по имени для предсказуемости
-    files.sort((a, b) => a.name.localeCompare(b.name));
-    setFolderResults([]);
-    setFolderErrors([]);
-    setFolderTotal(files.length);
-    setFolderCurrent(0);
-    setFolderUploading(true);
-    processFolderFiles(files);
-  };
-
-  const processFolderFiles = async (files) => {
-    const results = [];
-    const errors = [];
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      setFolderCurrent(i + 1);
-      try {
-        let fileToUpload = file;
-        if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-          try {
-            fileToUpload = await compressImageFile(file);
-          } catch (compressErr) {
-            console.warn('Compression failed, using original:', compressErr);
-          }
-        }
-        const formData = new FormData();
-        formData.append('image', fileToUpload);
-        formData.append('model', selectedModel);
-        formData.append('currency', currency);
-        formData.append('docType', docType);
-        formData.append('object', object);
-
-        const res = await fetch(`${API_URL}/api/upload-receipt?token=${token}`, { method: 'POST', body: formData });
-        const text = await res.text();
-        let data;
-        try { data = JSON.parse(text); } catch { throw new Error(`Сервер вернул ${res.status}`); }
-        if (!res.ok || (!data.success && !data.id)) throw new Error(data.error || 'Ошибка сервера');
-
-        const receiptData = data.data || data;
-        if (receiptData.image_url) receiptData.image_url = fixImageUrl(receiptData.image_url);
-        results.push(receiptData);
-      } catch (err) {
-        console.error(`Ошибка файла ${file.name}:`, err);
-        errors.push({ name: file.name, error: err.message });
-      }
-    }
-    setFolderResults(results);
-    setFolderErrors(errors);
-    setFolderUploading(false);
-    loadReceipts();
-    if (results.length > 0) {
-      setLastSavedReceipt(results[results.length - 1]);
-    }
-  };
-
   const recognizeAndSave = async () => {
     if (!selectedFiles.length) return;
     setRecognizing(true);
     setLastSavedReceipt(null);
     try {
       const file = selectedFiles[currentFileIndex];
+
+      // ====== COMPRESS BEFORE UPLOAD ======
       let fileToUpload = file;
       if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-        try {
-          console.log(`📦 File too large (${(file.size / 1024 / 1024).toFixed(1)}MB), compressing...`);
-          fileToUpload = await compressImageFile(file);
-        } catch (compressErr) {
-          console.warn('Compression failed, using original:', compressErr);
-          fileToUpload = file;
-        }
+        console.log(`📦 File too large (${(file.size / 1024 / 1024).toFixed(1)}MB), compressing...`);
+        fileToUpload = await compressImageFile(file);
       }
+
       const formData = new FormData();
       formData.append('image', fileToUpload);
       formData.append('model', selectedModel);
@@ -464,7 +355,7 @@ function App() {
     const selected = receipts.filter(r => selectedReceiptIds.has(r.id));
     for (const r of selected) {
       if (r.raw_text) {
-        const blob = new Blob([formatRawText(r.raw_text)], { type: 'text/plain' });
+        const blob = new Blob([r.raw_text], { type: 'text/plain' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -563,14 +454,7 @@ function App() {
           const res = await fetch(endpoint.url);
           if (res.ok) {
             const data = await res.json();
-            if (data.models) {
-              allModels = [...allModels, ...data.models.map(m => ({
-                name: m.id,
-                displayName: m.name || m.id,
-                provider: endpoint.provider,
-                status: 'ok'
-              }))];
-            }
+            if (data.models) allModels = [...allModels, ...data.models.map(m => ({ name: m.id, displayName: m.name || m.id, provider: endpoint.provider, status: 'ok' }))];
           }
         } catch (e) {}
       }
@@ -600,14 +484,13 @@ function App() {
     if (filterObject !== 'all' && r.object !== filterObject) return false;
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
-    return (r.store_name_ru || r.store_name || '').toLowerCase().includes(q) ||
-           (r.raw_text || '').toString().toLowerCase().includes(q);
+    return (r.store_name_ru || r.store_name || '').toLowerCase().includes(q) || (r.raw_text || '').toLowerCase().includes(q);
   });
 
-  const totalPages = itemsPerPage === 'all' ? 1 : Math.ceil(filteredReceipts.length / parseInt(itemsPerPage));
+  const totalPages = itemsPerPage === 'all' ? 1 : Math.ceil(filteredReceipts.length / itemsPerPage);
   const paginatedReceipts = itemsPerPage === 'all'
     ? filteredReceipts
-    : filteredReceipts.slice((currentPage - 1) * parseInt(itemsPerPage), currentPage * parseInt(itemsPerPage));
+    : filteredReceipts.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
   if (authChecking) {
     return (
@@ -625,13 +508,7 @@ function App() {
       <div className="App">
         <div className="login-box">
           <h1>🧾 Receipt Manager</h1>
-          <input
-            type="password"
-            placeholder="Введите пароль"
-            value={password}
-            onChange={e => setPassword(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && login()}
-          />
+          <input type="password" placeholder="Введите пароль" value={password} onChange={e => setPassword(e.target.value)} onKeyPress={e => e.key === 'Enter' && login()} />
           <button onClick={login}>Войти</button>
           {loginError && <p className="error">{loginError}</p>}
           <p className="hint">Пароли: admin, user1-user20</p>
@@ -668,34 +545,14 @@ function App() {
             </div>
             <div className="modal-body">
               <div className="modal-image-section">
-                {viewModal.image_url ? (
-                  <img src={viewModal.image_url} alt="Чек" className="modal-image" />
-                ) : (
-                  <div className="no-image">Нет фото</div>
-                )}
+                {viewModal.image_url ? <img src={viewModal.image_url} alt="Чек" className="modal-image" /> : <div className="no-image">Нет фото</div>}
               </div>
               <div className="modal-info">
                 <div className="info-block">
                   <h3>Основная информация</h3>
                   <p><strong>Магазин:</strong> {viewModal.store_name_ru || viewModal.store_name || '—'}</p>
                   <p><strong>Дата:</strong> {formatDate(viewModal.receipt_date)} {viewModal.receipt_time}</p>
-                  <p>
-                    <strong>Итого:</strong>{' '}
-                    <span style={{ fontSize: '18px', fontWeight: 'bold', color: '#27ae60' }}>
-                      {formatAmount(viewModal.total_amount, viewModal.currency)}
-                    </span>
-                  </p>
-                  <p style={{ fontSize: '13px', color: '#5d6d7e', marginTop: '4px' }}>
-                    Сумма по товарам: <strong>{calculateItemsSum(viewModal).toFixed(2)} {viewModal.currency || ''}</strong>
-                    {' · '}
-                    Разница:{' '}
-                    <span style={{
-                      color: Math.abs((parseFloat(viewModal.total_amount) || 0) - calculateItemsSum(viewModal)) < 0.01 ? '#27ae60' : '#e74c3c',
-                      fontWeight: 'bold'
-                    }}>
-                      {Math.abs((parseFloat(viewModal.total_amount) || 0) - calculateItemsSum(viewModal)).toFixed(2)} {viewModal.currency || ''}
-                    </span>
-                  </p>
+                  <p><strong>Итого:</strong> {formatAmount(viewModal.total_amount, viewModal.currency)}</p>
                   <p><strong>Тип:</strong> {viewModal.document_type}</p>
                   <p><strong>Объект:</strong> {viewModal.object || '—'}</p>
                   <p><strong>Метод:</strong> {viewModal.recognition_method || '—'}</p>
@@ -705,18 +562,10 @@ function App() {
                 <div className="info-block">
                   <h3>Товары ({viewModal.items?.length || 0})</h3>
                   <table className="items-table">
-                    <thead>
-                      <tr><th>№</th><th>Товар</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr>
-                    </thead>
+                    <thead><tr><th>№</th><th>Товар</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead>
                     <tbody>
                       {(viewModal.items || []).map((item, i) => (
-                        <tr key={i}>
-                          <td>{i + 1}</td>
-                          <td>{item.name_ru || item.name || '—'}</td>
-                          <td>{item.quantity}</td>
-                          <td>{item.price}</td>
-                          <td>{item.total}</td>
-                        </tr>
+                        <tr key={i}><td>{i + 1}</td><td>{item.name_ru || item.name || '—'}</td><td>{item.quantity}</td><td>{item.price}</td><td>{item.total}</td></tr>
                       ))}
                     </tbody>
                   </table>
@@ -724,24 +573,7 @@ function App() {
                 {viewModal.raw_text && (
                   <div className="info-block">
                     <h3>Распознанный текст</h3>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
-                      <div>
-                        <h4>Оригинал</h4>
-                        <div className="raw-text-readable">
-                          {formatRawText(viewModal.raw_text).split('\n').map((line, i) => (
-                            <div key={i} className="raw-text-line">{line}</div>
-                          ))}
-                        </div>
-                      </div>
-                      <div>
-                        <h4>Перевод на русский</h4>
-                        <div className="raw-text-readable">
-                          {generateRussianText(viewModal).split('\n').map((line, i) => (
-                            <div key={i} className="raw-text-line">{line}</div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
+                    <pre className="raw-text">{viewModal.raw_text}</pre>
                   </div>
                 )}
               </div>
@@ -765,12 +597,8 @@ function App() {
                 {modelsLoading ? <p>Загрузка...</p> : (
                   <div className="models-grid">
                     {models.map(model => (
-                      <div
-                        key={`${model.provider}-${model.name}`}
-                        className={`model-option ${selectedModel === model.name ? 'selected' : ''}`}
-                        onClick={() => { setSelectedModel(model.name); setShowModelSelector(false); }}
-                        title={`${model.provider} — ${model.displayName}`}
-                      >
+                      <div key={`${model.provider}-${model.name}`} className={`model-option ${selectedModel === model.name ? 'selected' : ''}`}
+                           onClick={() => { setSelectedModel(model.name); setShowModelSelector(false); }} title={`${model.provider} — ${model.displayName}`}>
                         <span className="provider-badge" style={{ backgroundColor: getProviderColor(model.provider) }}>{model.provider}</span>
                         <span className="model-name">{model.displayName}</span>
                         <span className="status-ok">✅</span>
@@ -785,16 +613,6 @@ function App() {
 
           <div className="drop-zone" onDrop={handleDrop} onDragOver={e => e.preventDefault()}>
             <input type="file" accept="image/*" multiple onChange={handleFileSelect} id="file-input" />
-            <input
-              type="file"
-              accept="image/*"
-              webkitdirectory="true"
-              directory="true"
-              multiple
-              onChange={handleFolderSelect}
-              id="folder-input"
-              style={{ display: 'none' }}
-            />
             <label htmlFor="file-input">
               {previewUrl ? (
                 <div className="preview-container">
@@ -823,96 +641,6 @@ function App() {
             </label>
           </div>
 
-          {/* Кнопка выбора папки */}
-          <div style={{ marginBottom: 20, textAlign: 'center' }}>
-            <label htmlFor="folder-input" style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '12px 24px',
-              background: '#2c3e50',
-              color: 'white',
-              borderRadius: 8,
-              cursor: 'pointer',
-              fontSize: 14,
-              fontWeight: 500
-            }}>
-              📁 Выбрать папку и распознать все
-            </label>
-            <p style={{ fontSize: 12, color: '#95a5a6', marginTop: 6 }}>
-              (Chrome, Edge, Safari на Mac — выбор папки с автоматической обработкой всех фото)
-            </p>
-          </div>
-
-          {/* Прогресс пакетной обработки */}
-          {folderUploading && (
-            <div style={{
-              background: '#eaf2f8',
-              border: '2px solid #3498db',
-              borderRadius: 12,
-              padding: 20,
-              marginBottom: 20,
-              textAlign: 'center'
-            }}>
-              <div className="spinner" style={{ margin: '0 auto 15px' }}></div>
-              <p style={{ fontSize: 16, fontWeight: 'bold', color: '#2c3e50', margin: '0 0 8px' }}>
-                Обработка папки...
-              </p>
-              <p style={{ fontSize: 14, color: '#5d6d7e', margin: 0 }}>
-                {folderCurrent} из {folderTotal} файлов
-              </p>
-              <div style={{
-                width: '100%',
-                height: 8,
-                background: '#ddd',
-                borderRadius: 4,
-                marginTop: 12,
-                overflow: 'hidden'
-              }}>
-                <div style={{
-                  width: `${folderTotal > 0 ? (folderCurrent / folderTotal) * 100 : 0}%`,
-                  height: '100%',
-                  background: '#3498db',
-                  transition: 'width 0.3s'
-                }}></div>
-              </div>
-            </div>
-          )}
-
-          {!folderUploading && folderResults.length > 0 && (
-            <div style={{
-              background: '#d4edda',
-              border: '2px solid #27ae60',
-              borderRadius: 12,
-              padding: 20,
-              marginBottom: 20
-            }}>
-              <h3 style={{ margin: '0 0 10px', color: '#27ae60' }}>✅ Папка обработана</h3>
-              <p style={{ margin: '0 0 8px', fontSize: 14 }}>
-                Успешно: <strong>{folderResults.length}</strong> · Ошибок: <strong>{folderErrors.length}</strong>
-              </p>
-              {folderErrors.length > 0 && (
-                <details style={{ marginTop: 10 }}>
-                  <summary style={{ color: '#e74c3c', fontSize: 13, cursor: 'pointer' }}>
-                    Ошибки ({folderErrors.length})
-                  </summary>
-                  <ul style={{ fontSize: 12, color: '#e74c3c', marginTop: 8 }}>
-                    {folderErrors.map((err, i) => (
-                      <li key={i}>{err.name}: {err.error}</li>
-                    ))}
-                  </ul>
-                </details>
-              )}
-              <button
-                className="close-btn"
-                style={{ marginTop: 15 }}
-                onClick={() => { setFolderResults([]); setFolderErrors([]); }}
-              >
-                Закрыть сводку
-              </button>
-            </div>
-          )}
-
           <div className="controls-row">
             <div className="control-group">
               <label>Валюта:</label>
@@ -940,41 +668,21 @@ function App() {
           </div>
 
           <div className="recognize-bar">
-            <button className="recognize-main-btn" onClick={recognizeAndSave} disabled={!selectedFiles.length || recognizing || folderUploading}>
+            <button className="recognize-main-btn" onClick={recognizeAndSave} disabled={!selectedFiles.length || recognizing}>
               {recognizing ? '⏳ Распознавание...' : '🔍 Распознать и сохранить'}
             </button>
           </div>
 
-          {lastSavedReceipt && !folderUploading && (
+          {lastSavedReceipt && (
             <div className="saved-receipt-card">
               <h3>✅ Чек сохранён</h3>
               <div className="receipt-preview">
-                {lastSavedReceipt.image_url ? (
-                  <img src={lastSavedReceipt.image_url} alt="Чек" className="receipt-image" />
-                ) : (
-                  <div className="no-image-thumb" style={{width:250,height:200}}>📄 Нет фото</div>
-                )}
+                {lastSavedReceipt.image_url ? <img src={lastSavedReceipt.image_url} alt="Чек" className="receipt-image" /> : <div className="no-image-thumb" style={{width:250,height:200}}>📄 Нет фото</div>}
                 <div className="receipt-info">
                   <p><strong>ID:</strong> {lastSavedReceipt.id}</p>
                   <p><strong>Магазин:</strong> {lastSavedReceipt.store_name_ru || lastSavedReceipt.store_name || '—'}</p>
                   <p><strong>Дата:</strong> {formatDate(lastSavedReceipt.receipt_date)}</p>
-                  <p>
-                    <strong>Итого:</strong>{' '}
-                    <span style={{ fontSize: '16px', fontWeight: 'bold', color: '#27ae60' }}>
-                      {formatAmount(lastSavedReceipt.total_amount, lastSavedReceipt.currency)}
-                    </span>
-                  </p>
-                  <p style={{ fontSize: '12px', color: '#5d6d7e' }}>
-                    Сумма по товарам: <strong>{calculateItemsSum(lastSavedReceipt).toFixed(2)} {lastSavedReceipt.currency || ''}</strong>
-                    {' · '}
-                    Разница:{' '}
-                    <span style={{
-                      color: Math.abs((parseFloat(lastSavedReceipt.total_amount) || 0) - calculateItemsSum(lastSavedReceipt)) < 0.01 ? '#27ae60' : '#e74c3c',
-                      fontWeight: 'bold'
-                    }}>
-                      {Math.abs((parseFloat(lastSavedReceipt.total_amount) || 0) - calculateItemsSum(lastSavedReceipt)).toFixed(2)} {lastSavedReceipt.currency || ''}
-                    </span>
-                  </p>
+                  <p><strong>Итого:</strong> {formatAmount(lastSavedReceipt.total_amount, lastSavedReceipt.currency)}</p>
                   <p><strong>Товаров:</strong> {lastSavedReceipt.items?.length || 0}</p>
                   <p><strong>Объект:</strong> {lastSavedReceipt.object || '—'}</p>
                   <p><strong>Метод:</strong> {lastSavedReceipt.recognition_method || '—'}</p>
@@ -992,24 +700,7 @@ function App() {
                   {lastSavedReceipt.raw_text && (
                     <details>
                       <summary>Распознанный текст</summary>
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: 10 }}>
-                        <div>
-                          <h5 style={{ margin: '0 0 6px 0', fontSize: '12px', color: '#7f8c8d' }}>Оригинал</h5>
-                          <div className="raw-text-readable" style={{ maxHeight: 300 }}>
-                            {formatRawText(lastSavedReceipt.raw_text).split('\n').map((line, i) => (
-                              <div key={i} className="raw-text-line">{line}</div>
-                            ))}
-                          </div>
-                        </div>
-                        <div>
-                          <h5 style={{ margin: '0 0 6px 0', fontSize: '12px', color: '#7f8c8d' }}>Перевод на русский</h5>
-                          <div className="raw-text-readable" style={{ maxHeight: 300 }}>
-                            {generateRussianText(lastSavedReceipt).split('\n').map((line, i) => (
-                              <div key={i} className="raw-text-line">{line}</div>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
+                      <pre style={{fontSize:'11px',maxHeight:200,overflow:'auto'}}>{lastSavedReceipt.raw_text}</pre>
                     </details>
                   )}
                 </div>
@@ -1033,7 +724,7 @@ function App() {
               {OBJECTS.map(o => <option key={o} value={o}>{o}</option>)}
             </select>
             <input type="text" placeholder="Поиск..." value={searchQuery} onChange={e => {setSearchQuery(e.target.value); setCurrentPage(1);}} />
-            <select value={itemsPerPage} onChange={e => {setItemsPerPage(e.target.value); setCurrentPage(1);}}>
+            <select value={itemsPerPage} onChange={e => {setItemsPerPage(e.target.value === 'all' ? 'all' : parseInt(e.target.value)); setCurrentPage(1);}}>
               {ITEMS_PER_PAGE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt === 'all' ? 'Все' : opt}</option>)}
             </select>
             <button onClick={() => exportExcel()}>📥 Excel (все)</button>
@@ -1078,28 +769,12 @@ function App() {
                 {paginatedReceipts.map(receipt => (
                   <div key={receipt.id} className="receipt-card">
                     <div className="receipt-header" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, paddingTop: 2 }}>
-                      <input
-                        type="checkbox"
-                        checked={selectedReceiptIds.has(receipt.id)}
-                        onChange={() => toggleSelect(receipt.id)}
-                        style={{ width: 20, height: 20, cursor: 'pointer', flexShrink: 0, marginTop: 2 }}
-                      />
+                      <input type="checkbox" checked={selectedReceiptIds.has(receipt.id)} onChange={() => toggleSelect(receipt.id)} style={{ width: 20, height: 20, cursor: 'pointer', flexShrink: 0, marginTop: 2 }} />
                       <h3 style={{ margin: 0, flex: 1, lineHeight: 1.3 }}>{receipt.store_name_ru || receipt.store_name || 'Без названия'}</h3>
                       <span className="type-badge" style={{ flexShrink: 0 }}>{receipt.document_type}</span>
                     </div>
                     <p className="date">{formatDate(receipt.receipt_date)} {receipt.receipt_time}</p>
                     <p className="amount">{formatAmount(receipt.total_amount, receipt.currency)}</p>
-                    <p style={{ fontSize: '12px', color: '#5d6d7e', margin: '2px 0 8px 0' }}>
-                      Σ товаров: {calculateItemsSum(receipt).toFixed(2)} {receipt.currency || ''}
-                      {' · '}
-                      Δ:{' '}
-                      <span style={{
-                        color: Math.abs((parseFloat(receipt.total_amount) || 0) - calculateItemsSum(receipt)) < 0.01 ? '#27ae60' : '#e74c3c',
-                        fontWeight: 'bold'
-                      }}>
-                        {Math.abs((parseFloat(receipt.total_amount) || 0) - calculateItemsSum(receipt)).toFixed(2)}
-                      </span>
-                    </p>
                     <p className="items-count">🛒 {receipt.items?.length || 0} товаров</p>
                     {receipt.object && <p style={{ fontSize: 12, color: '#7f8c8d', margin: '4px 0' }}>🏢 {receipt.object}</p>}
                     {receipt.image_url ? (
@@ -1129,5 +804,6 @@ function App() {
     </div>
   );
 }
-
+//
 export default App;
+//
