@@ -409,6 +409,71 @@ function App() {
     }
   };
 
+  // ====== EXPORT TO SELECTED FOLDER (File System Access API) ======
+  const exportToFolder = async () => {
+    if (selectedReceiptIds.size === 0) return alert('Выберите чеки');
+    
+    // Fallback для браузеров без поддержки showDirectoryPicker
+    if (!window.showDirectoryPicker) {
+      return bulkExportPackage();
+    }
+    
+    try {
+      const dirHandle = await window.showDirectoryPicker();
+      const selected = receipts.filter(r => selectedReceiptIds.has(r.id));
+      let savedCount = 0;
+      
+      // 1. Excel
+      const excelRes = await fetch(`${API_URL}/api/export-excel?token=${token}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ receiptIds: Array.from(selectedReceiptIds) })
+      });
+      if (excelRes.ok) {
+        const blob = await excelRes.blob();
+        const fileHandle = await dirHandle.getFileHandle('receipts.xlsx', { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        savedCount++;
+      }
+      
+      // 2. Text + Images for each receipt
+      for (const r of selected) {
+        if (r.raw_text) {
+          const blob = new Blob([r.raw_text], { type: 'text/plain' });
+          const fileHandle = await dirHandle.getFileHandle(`receipt_${r.id}_text.txt`, { create: true });
+          const writable = await fileHandle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          savedCount++;
+        }
+        if (r.image_url) {
+          try {
+            const imgRes = await fetch(r.image_url);
+            const blob = await imgRes.blob();
+            const ext = r.image_url.split('.').pop().split('?')[0] || 'jpg';
+            const safeExt = ext.match(/^[a-zA-Z0-9]+$/) ? ext : 'jpg';
+            const fileHandle = await dirHandle.getFileHandle(`receipt_${r.id}_image.${safeExt}`, { create: true });
+            const writable = await fileHandle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+            savedCount++;
+          } catch (imgErr) {
+            console.error(`Failed to save image for receipt ${r.id}:`, imgErr);
+          }
+        }
+      }
+      
+      alert(`✅ Сохранено ${savedCount} файлов в выбранную папку`);
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+      console.error('Export to folder error:', e);
+      alert('Ошибка сохранения: ' + e.message);
+    }
+  };
+
+  // ====== OLD FALLBACK EXPORT (downloads) ======
   const bulkExportPackage = async () => {
     if (selectedReceiptIds.size === 0) return alert('Выберите чеки');
     const ids = Array.from(selectedReceiptIds);
@@ -848,7 +913,8 @@ function App() {
             <div style={{ background: '#fff3cd', padding: '12px 15px', borderRadius: 8, marginBottom: 15, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
               <span>✅ Выбрано: <strong>{selectedReceiptIds.size}</strong></span>
               <button onClick={bulkDelete} style={{ background: '#e74c3c', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}>🗑️ Удалить</button>
-              <button onClick={bulkExportPackage} style={{ background: '#27ae60', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}>📁 Экспорт пакета</button>
+              <button onClick={exportToFolder} style={{ background: '#2980b9', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}>📁 В папку</button>
+              <button onClick={bulkExportPackage} style={{ background: '#7f8c8d', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}>📥 Скачать</button>
               <button onClick={() => bulkReprocess()} style={{ background: '#9b59b6', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}>🔄 Перераспознать</button>
               <select onChange={e => { if (e.target.value) bulkChangeObject(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
                 <option value="">Сменить объект...</option>
