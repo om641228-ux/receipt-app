@@ -9,9 +9,7 @@ const crypto = require('crypto');
 
 const router = express.Router();
 
-// ====== АККАУНТЫ (пароли на сервере) ======
-// role: 'admin' — полный доступ, видит все чеки, может удалять
-// role: 'user'  — видит ТОЛЬКО свои чеки, НЕ может удалять
+// ====== АККАУНТЫ ======
 const ACCOUNTS = [
   { id: 'admin',  name: 'Администратор',   role: 'admin', password: 'admin' },
   { id: 'user1',  name: 'Пользователь 1',  role: 'user',  password: 'user1' },
@@ -26,7 +24,7 @@ const ACCOUNTS = [
   { id: 'user10', name: 'Пользователь 10', role: 'user',  password: 'user10' },
 ];
 
-// ====== Хранилище владения и токенов ======
+// ====== Хранилище ======
 const STORE_FILE = path.join(__dirname, 'owners-store.json');
 
 function loadStore() {
@@ -65,7 +63,8 @@ function publicUsers() {
   return map;
 }
 
-// POST /api/login
+// ====== РОУТЫ ======
+
 router.post('/login', (req, res) => {
   const { password } = req.body || {};
   const acc = ACCOUNTS.find(a => a.password === password);
@@ -76,26 +75,22 @@ router.post('/login', (req, res) => {
   res.json({ success: true, token, user: { id: acc.id, name: acc.name, role: acc.role } });
 });
 
-// POST /api/logout
 router.post('/logout', (req, res) => {
   const { token } = req.body || {};
   if (token && store.tokens[token]) { delete store.tokens[token]; saveStore(); }
   res.json({ success: true });
 });
 
-// GET /api/me?token=...
 router.get('/me', (req, res) => {
   const user = userByToken(req.query.token);
   if (!user) return res.json({ success: false });
   res.json({ success: true, user: { id: user.id, name: user.name, role: user.role } });
 });
 
-// GET /api/owners
 router.get('/owners', (req, res) => {
   res.json({ success: true, owners: store.owners, users: publicUsers() });
 });
 
-// POST /api/set-owner — назначить владельца чека
 router.post('/set-owner', (req, res) => {
   const { token, receiptId } = req.body || {};
   const user = userByToken(token);
@@ -109,7 +104,7 @@ router.post('/set-owner', (req, res) => {
 });
 
 // ============================================================
-// MIDDLEWARE для защиты роутов
+// MIDDLEWARE
 // ============================================================
 
 function extractToken(req) {
@@ -137,7 +132,6 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-// Фильтрация: не-админ получает ТОЛЬКО свои чеки
 function scopeReceiptsByOwner(req, res, next) {
   if (req.userRole === 'admin') return next();
   const userId = req.userId;

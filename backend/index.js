@@ -351,6 +351,8 @@ const MODEL_MAP = {
   'gemini-3.1-flash-image-preview': 'gemini-3.1-flash-image-preview', 'gemini-3.1-flash-lite': 'gemini-3.1-flash-lite',
   'gemini-3.1-flash-lite-preview': 'gemini-3.1-flash-lite-preview', 'gemini-3.1-pro-preview': 'gemini-3.1-pro-preview',
   'gemini-3.1-pro-preview-customtools': 'gemini-3.1-pro-preview-customtools',
+  'gemini-3.5-flash': 'gemini-3.5-flash', 'gemini-3.5-flash-001': 'gemini-3.5-flash-001',
+  'gemini-3.5-flash-lite': 'gemini-3.5-flash-lite', 'gemini-3.5-flash-lite-001': 'gemini-3.5-flash-lite-001',
   'gemini-flash-latest': 'gemini-flash-latest', 'gemini-flash-lite-latest': 'gemini-flash-lite-latest',
   'gemini-pro-latest': 'gemini-pro-latest', 'gemini-robotics-er-1.6-preview': 'gemini-robotics-er-1.6-preview',
   'gemini-1.5-flash': 'gemini-1.5-flash', 'gemini-1.5-pro': 'gemini-1.5-pro',
@@ -362,8 +364,6 @@ const MODEL_MAP = {
   'gemini-robotics-er-1.5-preview': 'gemini-robotics-er-1.5-preview', 'gemini-2.5-computer-use-preview-10-2025': 'gemini-2.5-computer-use-preview-10-2025',
   'antigravity-preview-05-2026': 'antigravity-preview-05-2026', 'deep-research-max-preview-04-2026': 'deep-research-max-preview-04-2026',
   'deep-research-preview-04-2026': 'deep-research-preview-04-2026', 'deep-research-pro-preview-12-2025': 'deep-research-pro-preview-12-2025',
-  'gemini-3.5-flash': 'gemini-3.5-flash', 'gemini-3.5-flash-001': 'gemini-3.5-flash-001',
-  'gemini-3.5-flash-lite': 'gemini-3.5-flash-lite', 'gemini-3.5-flash-lite-001': 'gemini-3.5-flash-lite-001',
   'groq-llama-3.3-70b': 'llama-3.3-70b-versatile', 'groq-llama-4-scout': 'meta-llama/llama-4-scout-17b-16e-instruct',
   'groq-llama-4-maverick': 'meta-llama/llama-4-maverick-17b-128e-instruct',
   'groq-compound': 'groq/compound', 'groq-compound-mini': 'groq/compound-mini',
@@ -426,7 +426,7 @@ app.get('/api/receipts', authOwners.requireAuth, authOwners.scopeReceiptsByOwner
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.delete('/api/receipts/:id', authOwners.requireAuth, async (req, res) => {
+app.delete('/api/receipts/:id', authOwners.requireAuth, authOwners.requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { data: receipt, error: fetchErr } = await supabase.from('receipts').select('image_url').eq('id', id).single();
@@ -441,7 +441,7 @@ app.delete('/api/receipts/:id', authOwners.requireAuth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/bulk-delete', authOwners.requireAuth, async (req, res) => {
+app.post('/api/bulk-delete', authOwners.requireAuth, authOwners.requireAdmin, async (req, res) => {
   try {
     const { ids } = req.body;
     if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: 'No IDs provided' });
@@ -479,9 +479,9 @@ app.post('/api/bulk-update-currency', authOwners.requireAuth, async (req, res) =
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ====== UPLOAD RECEIPT ======
-app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
-  console.log('>>> /api/upload-receipt called');
+// ====== UPLOAD RECEIPT (с привязкой владельца) ======
+app.post('/api/upload-receipt', authOwners.requireAuth, upload.single('image'), async (req, res) => {
+  console.log('>>> /api/upload-receipt called by user:', req.user?.id, req.user?.name);
   try {
     const file = req.file;
     if (!file) return res.status(400).json({ success: false, error: 'Нет изображения (поле FormData должно называться "image")' });
@@ -563,6 +563,12 @@ app.post('/api/upload-receipt', upload.single('image'), async (req, res) => {
     console.log('💾 DB insert:', { store: insertData.store_name, total: insertData.total_amount, items: insertData.items.length, currency: insertData.currency, object: insertData.object });
     const { data: receipt, error } = await supabase.from('receipts').insert(insertData).select().single();
     if (error) throw error;
+
+    // ====== ПРИВЯЗКА ВЛАДЕЛЬЦА ======
+    if (receipt && receipt.id && req.user) {
+      authOwners.setOwner(receipt.id, req.user.id);
+      console.log('🔐 Owner set:', req.user.id, '-> receipt', receipt.id);
+    }
 
     console.log('✅ Saved ID:', receipt.id);
     const response = { success: true, ...receipt };
