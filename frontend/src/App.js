@@ -1,10 +1,12 @@
+//
+//
 import React, { useState, useEffect, useCallback } from 'react';
 import './App.css';
 
 const API_URL = 'https://backend-production-adc7.up.railway.app';
 const OBJECTS = ['other', 'Duqe', 'Maria', 'Kit', 'Dubai', 'Tich'];
 const ITEMS_PER_PAGE_OPTIONS = [10, 20, 50, 'all'];
-const MAX_FILE_SIZE_MB = 2;
+const MAX_FILE_SIZE_MB = 2; // если больше — сжимаем через Canvas
 
 const fixImageUrl = (url) => {
   if (!url) return null;
@@ -53,6 +55,7 @@ const FALLBACK_MODELS = [
 function compressImageFile(file, maxWidth = 1600, maxHeight = 2400, quality = 0.85) {
   return new Promise((resolve, reject) => {
     if (file.size <= MAX_FILE_SIZE_MB * 1024 * 1024) {
+      // Маленький файл — не сжимаем
       return resolve(file);
     }
 
@@ -61,6 +64,7 @@ function compressImageFile(file, maxWidth = 1600, maxHeight = 2400, quality = 0.
       const img = new Image();
       img.onload = () => {
         let { width, height } = img;
+        // Сохраняем пропорции
         if (width > maxWidth) {
           height = Math.round(height * (maxWidth / width));
           width = maxWidth;
@@ -97,33 +101,6 @@ function compressImageFile(file, maxWidth = 1600, maxHeight = 2400, quality = 0.
     reader.readAsDataURL(file);
   });
 }
-
-// ====== HIGHLIGHT SEARCH ======
-const escapeRegExp = (string) => {
-  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-};
-
-const HighlightText = ({ text, query }) => {
-  if (!query || !text) return <span>{text || '—'}</span>;
-  const lowerQuery = query.toLowerCase();
-  const lowerText = String(text).toLowerCase();
-  if (!lowerText.includes(lowerQuery)) return <span>{text}</span>;
-  
-  const parts = String(text).split(new RegExp(`(${escapeRegExp(query)})`, 'gi'));
-  return (
-    <span>
-      {parts.map((part, i) => 
-        part.toLowerCase() === lowerQuery ? (
-          <mark key={i} style={{ backgroundColor: '#ffeb3b', color: '#000', padding: '0 2px', borderRadius: 2, fontWeight: 600 }}>
-            {part}
-          </mark>
-        ) : (
-          <span key={i}>{part}</span>
-        )
-      )}
-    </span>
-  );
-};
 
 function App() {
   const [token, setToken] = useState(localStorage.getItem('token') || null);
@@ -284,40 +261,36 @@ function App() {
     }
   };
 
-  // ====== PROCESS SINGLE FILE ======
-  const processSingleFile = async (file) => {
-    let fileToUpload = file;
-    if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-      console.log(`📦 File too large (${(file.size / 1024 / 1024).toFixed(1)}MB), compressing...`);
-      fileToUpload = await compressImageFile(file);
-    }
-
-    const formData = new FormData();
-    formData.append('image', fileToUpload);
-    formData.append('model', selectedModel);
-    formData.append('currency', currency);
-    formData.append('docType', docType);
-    formData.append('object', object);
-
-    const res = await fetch(`${API_URL}/api/upload-receipt?token=${token}`, { method: 'POST', body: formData });
-    const text = await res.text();
-    let data;
-    try { data = JSON.parse(text); } catch { throw new Error(`Сервер вернул ${res.status}: ${text.slice(0, 200)}`); }
-    if (!res.ok) throw new Error(data.error || data.message || `Ошибка сервера: ${res.status}`);
-    if (!data.success && !data.id) throw new Error(data.error || 'Сохранение не удалось');
-
-    const receiptData = data.data || data;
-    if (receiptData.image_url) receiptData.image_url = fixImageUrl(receiptData.image_url);
-    return receiptData;
-  };
-
-  // ====== RECOGNIZE CURRENT FILE ======
   const recognizeAndSave = async () => {
     if (!selectedFiles.length) return;
     setRecognizing(true);
     setLastSavedReceipt(null);
     try {
-      const receiptData = await processSingleFile(selectedFiles[currentFileIndex]);
+      const file = selectedFiles[currentFileIndex];
+
+      // ====== COMPRESS BEFORE UPLOAD ======
+      let fileToUpload = file;
+      if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+        console.log(`📦 File too large (${(file.size / 1024 / 1024).toFixed(1)}MB), compressing...`);
+        fileToUpload = await compressImageFile(file);
+      }
+
+      const formData = new FormData();
+      formData.append('image', fileToUpload);
+      formData.append('model', selectedModel);
+      formData.append('currency', currency);
+      formData.append('docType', docType);
+      formData.append('object', object);
+
+      const res = await fetch(`${API_URL}/api/upload-receipt?token=${token}`, { method: 'POST', body: formData });
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch { throw new Error(`Сервер вернул ${res.status}: ${text.slice(0, 200)}`); }
+      if (!res.ok) throw new Error(data.error || data.message || `Ошибка сервера: ${res.status}`);
+      if (!data.success && !data.id) throw new Error(data.error || 'Сохранение не удалось');
+
+      const receiptData = data.data || data;
+      if (receiptData.image_url) receiptData.image_url = fixImageUrl(receiptData.image_url);
       setLastSavedReceipt(receiptData);
       loadReceipts();
     } catch (e) {
@@ -325,40 +298,6 @@ function App() {
       alert('Ошибка: ' + e.message);
     }
     setRecognizing(false);
-  };
-
-  // ====== BATCH RECOGNIZE ALL FILES ======
-  const recognizeAllFiles = async () => {
-    if (!selectedFiles.length) return;
-    if (selectedFiles.length === 1) {
-      return recognizeAndSave();
-    }
-    setRecognizing(true);
-    setLastSavedReceipt(null);
-    const results = [];
-    const errors = [];
-    
-    for (let i = 0; i < selectedFiles.length; i++) {
-      setCurrentFileIndex(i);
-      setPreviewUrl(previewUrls[i]);
-      try {
-        const receiptData = await processSingleFile(selectedFiles[i]);
-        results.push(receiptData);
-        setLastSavedReceipt(receiptData);
-      } catch (e) {
-        console.error(`Ошибка файла ${i+1}:`, e);
-        errors.push(`Файл ${i+1} (${selectedFiles[i].name}): ${e.message}`);
-      }
-    }
-    
-    loadReceipts();
-    setRecognizing(false);
-    
-    if (errors.length > 0) {
-      alert(`Распознано ${results.length} из ${selectedFiles.length}\n\nОшибки:\n${errors.join('\n')}`);
-    } else if (results.length > 0) {
-      alert(`✅ Успешно распознано ${results.length} из ${selectedFiles.length}`);
-    }
   };
 
   const deleteReceipt = async (id) => {
@@ -409,71 +348,6 @@ function App() {
     }
   };
 
-  // ====== EXPORT TO SELECTED FOLDER (File System Access API) ======
-  const exportToFolder = async () => {
-    if (selectedReceiptIds.size === 0) return alert('Выберите чеки');
-    
-    // Fallback для браузеров без поддержки showDirectoryPicker
-    if (!window.showDirectoryPicker) {
-      return bulkExportPackage();
-    }
-    
-    try {
-      const dirHandle = await window.showDirectoryPicker();
-      const selected = receipts.filter(r => selectedReceiptIds.has(r.id));
-      let savedCount = 0;
-      
-      // 1. Excel
-      const excelRes = await fetch(`${API_URL}/api/export-excel?token=${token}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ receiptIds: Array.from(selectedReceiptIds) })
-      });
-      if (excelRes.ok) {
-        const blob = await excelRes.blob();
-        const fileHandle = await dirHandle.getFileHandle('receipts.xlsx', { create: true });
-        const writable = await fileHandle.createWritable();
-        await writable.write(blob);
-        await writable.close();
-        savedCount++;
-      }
-      
-      // 2. Text + Images for each receipt
-      for (const r of selected) {
-        if (r.raw_text) {
-          const blob = new Blob([r.raw_text], { type: 'text/plain' });
-          const fileHandle = await dirHandle.getFileHandle(`receipt_${r.id}_text.txt`, { create: true });
-          const writable = await fileHandle.createWritable();
-          await writable.write(blob);
-          await writable.close();
-          savedCount++;
-        }
-        if (r.image_url) {
-          try {
-            const imgRes = await fetch(r.image_url);
-            const blob = await imgRes.blob();
-            const ext = r.image_url.split('.').pop().split('?')[0] || 'jpg';
-            const safeExt = ext.match(/^[a-zA-Z0-9]+$/) ? ext : 'jpg';
-            const fileHandle = await dirHandle.getFileHandle(`receipt_${r.id}_image.${safeExt}`, { create: true });
-            const writable = await fileHandle.createWritable();
-            await writable.write(blob);
-            await writable.close();
-            savedCount++;
-          } catch (imgErr) {
-            console.error(`Failed to save image for receipt ${r.id}:`, imgErr);
-          }
-        }
-      }
-      
-      alert(`✅ Сохранено ${savedCount} файлов в выбранную папку`);
-    } catch (e) {
-      if (e.name === 'AbortError') return;
-      console.error('Export to folder error:', e);
-      alert('Ошибка сохранения: ' + e.message);
-    }
-  };
-
-  // ====== OLD FALLBACK EXPORT (downloads) ======
   const bulkExportPackage = async () => {
     if (selectedReceiptIds.size === 0) return alert('Выберите чеки');
     const ids = Array.from(selectedReceiptIds);
@@ -605,28 +479,12 @@ function App() {
     return colors[provider] || '#888';
   };
 
-  // ====== EXTENDED SEARCH WITH HIGHLIGHT ======
   const filteredReceipts = receipts.filter(r => {
     if (filterType !== 'all' && r.document_type !== filterType) return false;
     if (filterObject !== 'all' && r.object !== filterObject) return false;
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase();
-    
-    const inStore = (r.store_name_ru || r.store_name || '').toLowerCase().includes(q);
-    const inText = (r.raw_text || '').toLowerCase().includes(q);
-    const inObject = (r.object || '').toLowerCase().includes(q);
-    const inCurrency = (r.currency || '').toLowerCase().includes(q);
-    const inType = (r.document_type || '').toLowerCase().includes(q);
-    const inAmount = String(r.total_amount || '').toLowerCase().includes(q);
-    const inDate = String(r.receipt_date || '').toLowerCase().includes(q);
-    const inItems = (r.items || []).some(item => 
-      (item.name_ru || item.name || '').toLowerCase().includes(q) ||
-      String(item.quantity || '').toLowerCase().includes(q) ||
-      String(item.price || '').toLowerCase().includes(q) ||
-      String(item.total || '').toLowerCase().includes(q)
-    );
-    
-    return inStore || inText || inObject || inCurrency || inType || inAmount || inDate || inItems;
+    return (r.store_name_ru || r.store_name || '').toLowerCase().includes(q) || (r.raw_text || '').toLowerCase().includes(q);
   });
 
   const totalPages = itemsPerPage === 'all' ? 1 : Math.ceil(filteredReceipts.length / itemsPerPage);
@@ -692,11 +550,11 @@ function App() {
               <div className="modal-info">
                 <div className="info-block">
                   <h3>Основная информация</h3>
-                  <p><strong>Магазин:</strong> <HighlightText text={viewModal.store_name_ru || viewModal.store_name} query={searchQuery} /></p>
+                  <p><strong>Магазин:</strong> {viewModal.store_name_ru || viewModal.store_name || '—'}</p>
                   <p><strong>Дата:</strong> {formatDate(viewModal.receipt_date)} {viewModal.receipt_time}</p>
                   <p><strong>Итого:</strong> {formatAmount(viewModal.total_amount, viewModal.currency)}</p>
                   <p><strong>Тип:</strong> {viewModal.document_type}</p>
-                  <p><strong>Объект:</strong> <HighlightText text={viewModal.object} query={searchQuery} /></p>
+                  <p><strong>Объект:</strong> {viewModal.object || '—'}</p>
                   <p><strong>Метод:</strong> {viewModal.recognition_method || '—'}</p>
                   {viewModal.subtotal && <p><strong>Подытог:</strong> {viewModal.subtotal}</p>}
                   {viewModal.tax_amount && <p><strong>Налог:</strong> {viewModal.tax_amount} ({viewModal.tax_rate || ''})</p>}
@@ -707,13 +565,7 @@ function App() {
                     <thead><tr><th>№</th><th>Товар</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead>
                     <tbody>
                       {(viewModal.items || []).map((item, i) => (
-                        <tr key={i}>
-                          <td>{i + 1}</td>
-                          <td><HighlightText text={item.name_ru || item.name} query={searchQuery} /></td>
-                          <td>{item.quantity}</td>
-                          <td>{item.price}</td>
-                          <td>{item.total}</td>
-                        </tr>
+                        <tr key={i}><td>{i + 1}</td><td>{item.name_ru || item.name || '—'}</td><td>{item.quantity}</td><td>{item.price}</td><td>{item.total}</td></tr>
                       ))}
                     </tbody>
                   </table>
@@ -721,7 +573,7 @@ function App() {
                 {viewModal.raw_text && (
                   <div className="info-block">
                     <h3>Распознанный текст</h3>
-                    <pre className="raw-text"><HighlightText text={viewModal.raw_text} query={searchQuery} /></pre>
+                    <pre className="raw-text">{viewModal.raw_text}</pre>
                   </div>
                 )}
               </div>
@@ -760,15 +612,7 @@ function App() {
           </div>
 
           <div className="drop-zone" onDrop={handleDrop} onDragOver={e => e.preventDefault()}>
-            <input 
-              type="file" 
-              accept="image/*" 
-              multiple 
-              webkitdirectory="" 
-              directory="" 
-              onChange={handleFileSelect} 
-              id="file-input" 
-            />
+            <input type="file" accept="image/*" multiple onChange={handleFileSelect} id="file-input" />
             <label htmlFor="file-input">
               {previewUrl ? (
                 <div className="preview-container">
@@ -786,17 +630,12 @@ function App() {
                       {selectedFiles[currentFileIndex].size > MAX_FILE_SIZE_MB * 1024 * 1024 && ' (будет сжато)'}
                     </p>
                   )}
-                  {selectedFiles.length > 1 && (
-                    <p style={{ fontSize: 13, color: '#3498db', fontWeight: 600, marginTop: 5 }}>
-                      📁 Выбрано файлов: {selectedFiles.length}
-                    </p>
-                  )}
                 </div>
               ) : (
                 <div className="drop-text">
                   <p>📷 Перетащите фото чека сюда</p>
-                  <p>или нажмите для выбора файлов / папки</p>
-                  <p className="hint">Можно выбрать несколько файлов или целую папку</p>
+                  <p>или нажмите для выбора файлов</p>
+                  <p className="hint">Можно выбрать несколько файлов</p>
                 </div>
               )}
             </label>
@@ -828,20 +667,15 @@ function App() {
             </div>
           </div>
 
-          <div className="recognize-bar" style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+          <div className="recognize-bar">
             <button className="recognize-main-btn" onClick={recognizeAndSave} disabled={!selectedFiles.length || recognizing}>
-              {recognizing ? '⏳ Распознавание...' : '🔍 Распознать текущий'}
+              {recognizing ? '⏳ Распознавание...' : '🔍 Распознать и сохранить'}
             </button>
-            {selectedFiles.length > 1 && (
-              <button className="recognize-main-btn" onClick={recognizeAllFiles} disabled={!selectedFiles.length || recognizing} style={{ background: '#27ae60' }}>
-                {recognizing ? '⏳ Обработка...' : `🔍 Распознать все (${selectedFiles.length})`}
-              </button>
-            )}
           </div>
 
           {lastSavedReceipt && (
             <div className="saved-receipt-card">
-              <h3>✅ Последний сохранённый чек</h3>
+              <h3>✅ Чек сохранён</h3>
               <div className="receipt-preview">
                 {lastSavedReceipt.image_url ? <img src={lastSavedReceipt.image_url} alt="Чек" className="receipt-image" /> : <div className="no-image-thumb" style={{width:250,height:200}}>📄 Нет фото</div>}
                 <div className="receipt-info">
@@ -889,13 +723,7 @@ function App() {
               <option value="all">Все объекты</option>
               {OBJECTS.map(o => <option key={o} value={o}>{o}</option>)}
             </select>
-            <input 
-              type="text" 
-              placeholder="Поиск по всем полям..." 
-              value={searchQuery} 
-              onChange={e => {setSearchQuery(e.target.value); setCurrentPage(1);}} 
-              style={{ minWidth: 200 }}
-            />
+            <input type="text" placeholder="Поиск..." value={searchQuery} onChange={e => {setSearchQuery(e.target.value); setCurrentPage(1);}} />
             <select value={itemsPerPage} onChange={e => {setItemsPerPage(e.target.value === 'all' ? 'all' : parseInt(e.target.value)); setCurrentPage(1);}}>
               {ITEMS_PER_PAGE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt === 'all' ? 'Все' : opt}</option>)}
             </select>
@@ -903,18 +731,11 @@ function App() {
             <button onClick={() => loadReceipts()}>🔄 Обновить</button>
           </div>
 
-          {searchQuery && (
-            <div style={{ background: '#e3f2fd', padding: '8px 15px', borderRadius: 6, marginBottom: 10, fontSize: 14 }}>
-              🔍 Поиск: <strong>{searchQuery}</strong> · Найдено: <strong>{filteredReceipts.length}</strong>
-            </div>
-          )}
-
           {selectedReceiptIds.size > 0 && (
             <div style={{ background: '#fff3cd', padding: '12px 15px', borderRadius: 8, marginBottom: 15, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
               <span>✅ Выбрано: <strong>{selectedReceiptIds.size}</strong></span>
               <button onClick={bulkDelete} style={{ background: '#e74c3c', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}>🗑️ Удалить</button>
-              <button onClick={exportToFolder} style={{ background: '#2980b9', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}>📁 В папку</button>
-              <button onClick={bulkExportPackage} style={{ background: '#7f8c8d', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}>📥 Скачать</button>
+              <button onClick={bulkExportPackage} style={{ background: '#27ae60', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}>📁 Экспорт пакета</button>
               <button onClick={() => bulkReprocess()} style={{ background: '#9b59b6', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}>🔄 Перераспознать</button>
               <select onChange={e => { if (e.target.value) bulkChangeObject(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
                 <option value="">Сменить объект...</option>
@@ -949,23 +770,13 @@ function App() {
                   <div key={receipt.id} className="receipt-card">
                     <div className="receipt-header" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, paddingTop: 2 }}>
                       <input type="checkbox" checked={selectedReceiptIds.has(receipt.id)} onChange={() => toggleSelect(receipt.id)} style={{ width: 20, height: 20, cursor: 'pointer', flexShrink: 0, marginTop: 2 }} />
-                      <h3 style={{ margin: 0, flex: 1, lineHeight: 1.3 }}>
-                        <HighlightText text={receipt.store_name_ru || receipt.store_name || 'Без названия'} query={searchQuery} />
-                      </h3>
+                      <h3 style={{ margin: 0, flex: 1, lineHeight: 1.3 }}>{receipt.store_name_ru || receipt.store_name || 'Без названия'}</h3>
                       <span className="type-badge" style={{ flexShrink: 0 }}>{receipt.document_type}</span>
                     </div>
-                    <p className="date">
-                      <HighlightText text={formatDate(receipt.receipt_date)} query={searchQuery} /> {receipt.receipt_time}
-                    </p>
-                    <p className="amount">
-                      <HighlightText text={formatAmount(receipt.total_amount, receipt.currency)} query={searchQuery} />
-                    </p>
+                    <p className="date">{formatDate(receipt.receipt_date)} {receipt.receipt_time}</p>
+                    <p className="amount">{formatAmount(receipt.total_amount, receipt.currency)}</p>
                     <p className="items-count">🛒 {receipt.items?.length || 0} товаров</p>
-                    {receipt.object && (
-                      <p style={{ fontSize: 12, color: '#7f8c8d', margin: '4px 0' }}>
-                        🏢 <HighlightText text={receipt.object} query={searchQuery} />
-                      </p>
-                    )}
+                    {receipt.object && <p style={{ fontSize: 12, color: '#7f8c8d', margin: '4px 0' }}>🏢 {receipt.object}</p>}
                     {receipt.image_url ? (
                       <img src={receipt.image_url} alt="Чек" className="receipt-thumb" onError={(e) => { e.target.style.display = 'none'; }} />
                     ) : (
@@ -993,5 +804,5 @@ function App() {
     </div>
   );
 }
-
+//
 export default App;
