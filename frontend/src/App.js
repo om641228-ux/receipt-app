@@ -123,6 +123,7 @@ function App() {
   const [docType, setDocType] = useState('receipt');
   const [object, setObject] = useState('other');
   const [showModelSelector, setShowModelSelector] = useState(false);
+  const [exportMode, setExportMode] = useState('all');
 
   const [models, setModels] = useState(FALLBACK_MODELS);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -349,22 +350,84 @@ function App() {
     }
   };
 
-  const bulkExportPackage = async () => {
+  const handleExport = async () => {
     if (selectedReceiptIds.size === 0) return alert('Выберите чеки');
     const ids = Array.from(selectedReceiptIds);
-    await exportExcel(ids);
     const selected = receipts.filter(r => selectedReceiptIds.has(r.id));
-    for (const r of selected) {
-      if (r.raw_text) {
-        const blob = new Blob([r.raw_text], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `receipt_${r.id}_text.txt`;
-        a.click();
-        URL.revokeObjectURL(url);
+
+    // Пытаемся открыть диалог выбора папки (File System Access API)
+    let dirHandle = null;
+    try {
+      if (window.showDirectoryPicker) {
+        dirHandle = await window.showDirectoryPicker();
       }
-      if (r.image_url) await downloadFile(r.image_url, `receipt_${r.id}_image.jpg`);
+    } catch (e) {
+      dirHandle = null; // пользователь отменил или API не доступен
+    }
+
+    const saveFile = async (blob, filename) => {
+      if (dirHandle) {
+        try {
+          const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
+          const writable = await fileHandle.createWritable();
+          await writable.write(blob);
+          await writable.close();
+          return;
+        } catch (e) {
+          // fallback to regular download
+        }
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    };
+
+    // Excel
+    if (exportMode === 'all' || exportMode === 'excel') {
+      try {
+        const res = await fetch(`${API_URL}/api/export-excel?token=${token}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ receiptIds: ids })
+        });
+        if (!res.ok) throw new Error('Export failed');
+        const blob = await res.blob();
+        await saveFile(blob, 'receipts.xlsx');
+      } catch (e) {
+        console.error('Excel export error:', e);
+        alert('Ошибка экспорта Excel');
+      }
+    }
+
+    // Текст
+    if (exportMode === 'all' || exportMode === 'text') {
+      for (const r of selected) {
+        if (r.raw_text) {
+          const blob = new Blob([r.raw_text], { type: 'text/plain' });
+          await saveFile(blob, `receipt_${r.id}_text.txt`);
+        }
+      }
+    }
+
+    // Фото
+    if (exportMode === 'all' || exportMode === 'photo') {
+      for (const r of selected) {
+        if (r.image_url) {
+          try {
+            const res = await fetch(r.image_url);
+            const blob = await res.blob();
+            const ext = (r.image_url.split('.').pop().split('?')[0]) || 'jpg';
+            await saveFile(blob, `receipt_${r.id}_image.${ext}`);
+          } catch (e) {
+            console.error('Photo download error:', e);
+          }
+        }
+      }
     }
   };
 
@@ -557,6 +620,7 @@ function App() {
                   <p><strong>Тип:</strong> {viewModal.document_type}</p>
                   <p><strong>Объект:</strong> {viewModal.object || '—'}</p>
                   <p><strong>Метод:</strong> {viewModal.recognition_method || '—'}</p>
+                  <p><strong>Добавил:</strong> {viewModal.owner_name || viewModal.owner_id || '—'}</p>
                   {viewModal.subtotal && <p><strong>Подытог:</strong> {viewModal.subtotal}</p>}
                   {viewModal.tax_amount && <p><strong>Налог:</strong> {viewModal.tax_amount} ({viewModal.tax_rate || ''})</p>}
                 </div>
@@ -740,7 +804,15 @@ function App() {
               {user?.role === 'admin' && (
               <button onClick={bulkDelete} style={{ background: '#e74c3c', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}>🗑️ Удалить</button>
             )}
-              <button onClick={bulkExportPackage} style={{ background: '#27ae60', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}>📁 Экспорт пакета</button>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <select value={exportMode} onChange={e => setExportMode(e.target.value)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ccc', fontSize: 14 }}>
+                <option value="all">Все (Excel+Фото+Текст)</option>
+                <option value="excel">📊 Excel</option>
+                <option value="photo">📷 Фото</option>
+                <option value="text">📝 Текст</option>
+              </select>
+              <button onClick={handleExport} style={{ background: '#27ae60', color: 'white', border: 'none', padding: '6px 14px', borderRadius: 6, cursor: 'pointer', fontWeight: 500 }}>📥 Скачать</button>
+            </div>
               <button onClick={() => bulkReprocess()} style={{ background: '#9b59b6', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}>🔄 Перераспознать</button>
               <select onChange={e => { if (e.target.value) bulkChangeObject(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
                 <option value="">Сменить объект...</option>
