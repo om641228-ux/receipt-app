@@ -1,17 +1,20 @@
 # Dependencies
 node_modules/
-package-lock.json
-yarn.lock
 
 # Environment
 .env
 .env.local
+.env.*.local
 
 # Uploads
 uploads/
 
-# Generated files
+# Auth store
 owners-store.json
+
+# Logs
+*.log
+npm-debug.log*
 
 # OS
 .DS_Store
@@ -20,8 +23,6 @@ Thumbs.db
 # IDE
 .vscode/
 .idea/
-*.swp
 
-# Logs
-*.log
-npm-debug.log*
+# Railway
+.railway/
