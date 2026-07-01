@@ -2,9 +2,9 @@
   "name": "receipt-manager-backend",
   "version": "1.0.1",
   "description": "Receipt Manager Backend API",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node server.js"
   },
   "engines": {
     "node": ">=20.0.0"
