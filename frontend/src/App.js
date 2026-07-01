@@ -281,6 +281,7 @@ function App() {
       formData.append('currency', currency);
       formData.append('docType', docType);
       formData.append('object', object);
+      formData.append('token', token);
 
       const res = await fetch(`${API_URL}/api/upload-receipt?token=${token}`, { method: 'POST', body: formData });
       const text = await res.text();

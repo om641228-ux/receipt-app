@@ -418,9 +418,14 @@ app.get('/api/list-ocrspace-models', (req, res) => {
 
 // ====== CORE ROUTES ======
 
-app.get('/api/receipts', authOwners.requireAuth, authOwners.scopeReceiptsByOwner, async (req, res) => {
+// GET /api/receipts — для user фильтруем по owner_id в Supabase
+app.get('/api/receipts', authOwners.requireAuth, async (req, res) => {
   try {
-    const { data, error } = await supabase.from('receipts').select('*').order('created_at', { ascending: false });
+    let query = supabase.from('receipts').select('*').order('created_at', { ascending: false });
+    if (req.userRole !== 'admin') {
+      query = query.eq('owner_id', req.userId);
+    }
+    const { data, error } = await query;
     if (error) throw error;
     res.json(data || []);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -463,7 +468,11 @@ app.post('/api/bulk-update-object', authOwners.requireAuth, async (req, res) => 
     const { ids, object } = req.body;
     if (!Array.isArray(ids)) return res.status(400).json({ error: 'No IDs provided' });
     const obj = OBJECTS.includes(object) ? object : 'other';
-    const { error } = await supabase.from('receipts').update({ object: obj }).in('id', ids);
+    let query = supabase.from('receipts').update({ object: obj }).in('id', ids);
+    if (req.userRole !== 'admin') {
+      query = query.eq('owner_id', req.userId);
+    }
+    const { error } = await query;
     if (error) throw error;
     res.json({ success: true, updated: ids.length });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -473,15 +482,20 @@ app.post('/api/bulk-update-currency', authOwners.requireAuth, async (req, res) =
   try {
     const { ids, currency } = req.body;
     if (!Array.isArray(ids)) return res.status(400).json({ error: 'No IDs provided' });
-    const { error } = await supabase.from('receipts').update({ currency }).in('id', ids);
+    let query = supabase.from('receipts').update({ currency }).in('id', ids);
+    if (req.userRole !== 'admin') {
+      query = query.eq('owner_id', req.userId);
+    }
+    const { error } = await query;
     if (error) throw error;
     res.json({ success: true, updated: ids.length });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ====== UPLOAD RECEIPT (с привязкой владельца) ======
-app.post('/api/upload-receipt', authOwners.requireAuth, upload.single('image'), async (req, res) => {
-  console.log('>>> /api/upload-receipt called by user:', req.user?.id, req.user?.name);
+// ====== UPLOAD RECEIPT (multer СНАЧАЛА, потом auth) ======
+app.post('/api/upload-receipt', upload.single('image'), authOwners.requireAuth, async (req, res) => {
+  console.log('>>> /api/upload-receipt called');
+  console.log('👤 User:', req.user?.id, req.user?.name, 'Role:', req.user?.role);
   try {
     const file = req.file;
     if (!file) return res.status(400).json({ success: false, error: 'Нет изображения (поле FormData должно называться "image")' });
@@ -557,18 +571,15 @@ app.post('/api/upload-receipt', authOwners.requireAuth, upload.single('image'), 
       total_amount: recognized?.total_amount || 0, subtotal: sanitizeForDB(recognized?.subtotal),
       tax_amount: sanitizeForDB(recognized?.tax_amount), tax_rate: sanitizeForDB(recognized?.tax_rate),
       items: itemsToSave, raw_text: rawTextToSave, object: OBJECTS.includes(object) ? object : 'other',
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString(),
+      // ====== ВЛАДЕЛЕЦ ======
+      owner_id: req.user?.id || null,
+      owner_name: req.user?.name || null
     };
 
-    console.log('💾 DB insert:', { store: insertData.store_name, total: insertData.total_amount, items: insertData.items.length, currency: insertData.currency, object: insertData.object });
+    console.log('💾 DB insert (with owner):', { store: insertData.store_name, total: insertData.total_amount, items: insertData.items.length, currency: insertData.currency, object: insertData.object, owner_id: insertData.owner_id, owner_name: insertData.owner_name });
     const { data: receipt, error } = await supabase.from('receipts').insert(insertData).select().single();
     if (error) throw error;
-
-    // ====== ПРИВЯЗКА ВЛАДЕЛЬЦА ======
-    if (receipt && receipt.id && req.user) {
-      authOwners.setOwner(receipt.id, req.user.id);
-      console.log('🔐 Owner set:', req.user.id, '-> receipt', receipt.id);
-    }
 
     console.log('✅ Saved ID:', receipt.id);
     const response = { success: true, ...receipt };
@@ -586,9 +597,11 @@ app.post('/api/export-excel', authOwners.requireAuth, async (req, res) => {
     const { receiptIds } = req.body;
     let query = supabase.from('receipts').select('*');
     if (receiptIds && receiptIds.length > 0) query = query.in('id', receiptIds);
+    if (req.userRole !== 'admin') {
+      query = query.eq('owner_id', req.userId);
+    }
     let { data: receipts, error } = await query.order('receipt_date', { ascending: false });
     if (error) throw error;
-    if (req.userRole && req.userRole !== 'admin') receipts = authOwners.filterOwned(receipts, req.userId);
     if (!receipts || receipts.length === 0) return res.status(404).json({ success: false, error: 'Не найдено' });
 
     const fmt = (v) => parseFloat(v || 0).toFixed(2).replace('.', ',');
@@ -635,7 +648,11 @@ app.post('/api/reprocess-receipt', authOwners.requireAuth, async (req, res) => {
   try {
     const { receiptId, model } = req.body;
     if (!receiptId) return res.status(400).json({ success: false, error: 'Нет ID чека' });
-    const { data: receipt, error: fetchError } = await supabase.from('receipts').select('*').eq('id', receiptId).single();
+    let query = supabase.from('receipts').select('*').eq('id', receiptId);
+    if (req.userRole !== 'admin') {
+      query = query.eq('owner_id', req.userId);
+    }
+    const { data: receipt, error: fetchError } = await query.single();
     if (fetchError || !receipt) return res.status(404).json({ success: false, error: 'Чек не найден' });
     if (!receipt.image_url) return res.status(400).json({ success: false, error: 'Нет изображения' });
 
