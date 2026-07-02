@@ -1,12 +1,10 @@
-//
-//
 import React, { useState, useEffect, useCallback } from 'react';
 import './App.css';
 
 const API_URL = 'https://backend-production-adc7.up.railway.app';
 const OBJECTS = ['other', 'Duqe', 'Maria', 'Kit', 'Dubai', 'Tich'];
 const ITEMS_PER_PAGE_OPTIONS = [10, 20, 50, 'all'];
-const MAX_FILE_SIZE_MB = 2; // если больше — сжимаем через Canvas
+const MAX_FILE_SIZE_MB = 2;
 
 const fixImageUrl = (url) => {
   if (!url) return null;
@@ -51,48 +49,31 @@ const FALLBACK_MODELS = [
   { name: 'groq-gemma', displayName: 'Groq Gemma', provider: 'Groq' },
 ];
 
-// ====== FRONTEND IMAGE COMPRESSION ======
 function compressImageFile(file, maxWidth = 1600, maxHeight = 2400, quality = 0.85) {
   return new Promise((resolve, reject) => {
     if (file.size <= MAX_FILE_SIZE_MB * 1024 * 1024) {
-      // Маленький файл — не сжимаем
       return resolve(file);
     }
-
     const reader = new FileReader();
     reader.onload = (e) => {
       const img = new Image();
       img.onload = () => {
         let { width, height } = img;
-        // Сохраняем пропорции
-        if (width > maxWidth) {
-          height = Math.round(height * (maxWidth / width));
-          width = maxWidth;
-        }
-        if (height > maxHeight) {
-          width = Math.round(width * (maxHeight / height));
-          height = maxHeight;
-        }
-
+        if (width > maxWidth) { height = Math.round(height * (maxWidth / width)); width = maxWidth; }
+        if (height > maxHeight) { width = Math.round(width * (maxHeight / height)); height = maxHeight; }
         const canvas = document.createElement('canvas');
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, width, height);
-
-        canvas.toBlob(
-          (blob) => {
-            if (!blob) return reject(new Error('Canvas toBlob failed'));
-            const compressedFile = new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), {
-              type: 'image/jpeg',
-              lastModified: Date.now()
-            });
-            console.log(`📉 Frontend compressed: ${(file.size / 1024 / 1024).toFixed(2)}MB → ${(compressedFile.size / 1024 / 1024).toFixed(2)}MB`);
-            resolve(compressedFile);
-          },
-          'image/jpeg',
-          quality
-        );
+        canvas.toBlob((blob) => {
+          if (!blob) return reject(new Error('Canvas toBlob failed'));
+          const compressedFile = new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), {
+            type: 'image/jpeg', lastModified: Date.now()
+          });
+          console.log(`Frontend compressed: ${(file.size / 1024 / 1024).toFixed(2)}MB → ${(compressedFile.size / 1024 / 1024).toFixed(2)}MB`);
+          resolve(compressedFile);
+        }, 'image/jpeg', quality);
       };
       img.onerror = () => reject(new Error('Failed to load image'));
       img.src = e.target.result;
@@ -268,14 +249,11 @@ function App() {
     setLastSavedReceipt(null);
     try {
       const file = selectedFiles[currentFileIndex];
-
-      // ====== COMPRESS BEFORE UPLOAD ======
       let fileToUpload = file;
       if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
-        console.log(`📦 File too large (${(file.size / 1024 / 1024).toFixed(1)}MB), compressing...`);
+        console.log(`File too large (${(file.size / 1024 / 1024).toFixed(1)}MB), compressing...`);
         fileToUpload = await compressImageFile(file);
       }
-
       const formData = new FormData();
       formData.append('image', fileToUpload);
       formData.append('model', selectedModel);
@@ -332,102 +310,148 @@ function App() {
     }
   };
 
-  const downloadFile = async (url, filename) => {
-    try {
-      const res = await fetch(url);
-      const blob = await res.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = objectUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(objectUrl);
-    } catch (e) {
-      console.error('Download failed', e);
-      window.open(url, '_blank');
-    }
+  const downloadBlob = (blob, filename) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const generateReceiptCSV = (receipt) => {
+    const items = receipt.items || [];
+    let csv = '\uFEFFМагазин;Дата;Валюта;Товар;Кол-во;Цена;Сумма\n';
+    items.forEach(item => {
+      csv += [
+        (receipt.store_name || '').replace(/;/g, ','),
+        receipt.receipt_date || receipt.date || '',
+        receipt.currency || '',
+        (item.name || item.name_ru || '').replace(/;/g, ','),
+        item.quantity || 1,
+        item.price || '',
+        item.total || ((item.price || 0) * (item.quantity || 1))
+      ].join(';') + '\n';
+    });
+    csv += `;;ИТОГО;${receipt.total_amount || ''};;\n`;
+    return csv;
   };
 
   const handleExport = async () => {
     if (selectedReceiptIds.size === 0) return alert('Выберите чеки');
-    const ids = Array.from(selectedReceiptIds);
     const selected = receipts.filter(r => selectedReceiptIds.has(r.id));
 
-    // Пытаемся открыть диалог выбора папки (File System Access API)
     let dirHandle = null;
-    try {
-      if (window.showDirectoryPicker) {
+    let useFolder = false;
+
+    if (window.showDirectoryPicker) {
+      try {
         dirHandle = await window.showDirectoryPicker();
+        useFolder = true;
+      } catch (err) {
+        if (err.name === 'AbortError') return;
+        console.warn('showDirectoryPicker error:', err);
       }
-    } catch (e) {
-      dirHandle = null; // пользователь отменил или API не доступен
     }
 
-    const saveFile = async (blob, filename) => {
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+    if (!useFolder && isMobile) {
+      alert('На этом устройстве выбор папки не поддерживается. Файлы будут скачаны в папку «Загрузки».');
+    }
+
+    const formats = [];
+    if (exportMode === 'all') {
+      formats.push('excel', 'text', 'photo');
+    } else {
+      formats.push(exportMode);
+    }
+
+    let savedCount = 0;
+
+    for (const receipt of selected) {
+      const safeName = (receipt.store_name || 'receipt')
+        .replace(/[^a-zA-Z0-9\u0400-\u04FF]/g, '_')
+        .substring(0, 40);
+      const folderName = `${safeName}_${String(receipt.id).slice(-4)}`;
+
+      let subDir = null;
       if (dirHandle) {
         try {
-          const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
-          const writable = await fileHandle.createWritable();
-          await writable.write(blob);
-          await writable.close();
-          return;
+          subDir = await dirHandle.getDirectoryHandle(folderName, { create: true });
         } catch (e) {
-          // fallback to regular download
+          console.error('Cannot create subdir:', e);
         }
       }
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    };
 
-    // Excel
-    if (exportMode === 'all' || exportMode === 'excel') {
-      try {
-        const res = await fetch(`${API_URL}/api/export-excel?token=${token}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ receiptIds: ids })
-        });
-        if (!res.ok) throw new Error('Export failed');
-        const blob = await res.blob();
-        await saveFile(blob, 'receipts.xlsx');
-      } catch (e) {
-        console.error('Excel export error:', e);
-        alert('Ошибка экспорта Excel');
-      }
-    }
-
-    // Текст
-    if (exportMode === 'all' || exportMode === 'text') {
-      for (const r of selected) {
-        if (r.raw_text) {
-          const blob = new Blob([r.raw_text], { type: 'text/plain' });
-          await saveFile(blob, `receipt_${r.id}_text.txt`);
+      if (formats.includes('excel')) {
+        try {
+          const csv = generateReceiptCSV(receipt);
+          const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+          if (subDir) {
+            const fileHandle = await subDir.getFileHandle('receipt.csv', { create: true });
+            const writable = await fileHandle.createWritable();
+            await writable.write(blob);
+            await writable.close();
+            savedCount++;
+          } else {
+            downloadBlob(blob, `${folderName}.csv`);
+            await new Promise(r => setTimeout(r, 300));
+          }
+        } catch (e) {
+          console.error('CSV export error:', e);
         }
       }
-    }
 
-    // Фото
-    if (exportMode === 'all' || exportMode === 'photo') {
-      for (const r of selected) {
-        if (r.image_url) {
+      if (formats.includes('text')) {
+        const text = receipt.raw_text || receipt.recognized_text || '';
+        if (text) {
           try {
-            const res = await fetch(r.image_url);
-            const blob = await res.blob();
-            const ext = (r.image_url.split('.').pop().split('?')[0]) || 'jpg';
-            await saveFile(blob, `receipt_${r.id}_image.${ext}`);
+            const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+            if (subDir) {
+              const fileHandle = await subDir.getFileHandle('recognized_text.txt', { create: true });
+              const writable = await fileHandle.createWritable();
+              await writable.write(blob);
+              await writable.close();
+              savedCount++;
+            } else {
+              downloadBlob(blob, `${folderName}_text.txt`);
+              await new Promise(r => setTimeout(r, 300));
+            }
           } catch (e) {
-            console.error('Photo download error:', e);
+            console.error('Text export error:', e);
           }
         }
       }
+
+      if (formats.includes('photo')) {
+        if (receipt.image_url) {
+          try {
+            const res = await fetch(receipt.image_url);
+            const blob = await res.blob();
+            const ext = (receipt.image_url.split('.').pop().split('?')[0]) || 'jpg';
+            if (subDir) {
+              const fileHandle = await subDir.getFileHandle(`receipt.${ext}`, { create: true });
+              const writable = await fileHandle.createWritable();
+              await writable.write(blob);
+              await writable.close();
+              savedCount++;
+            } else {
+              downloadBlob(blob, `${folderName}_image.${ext}`);
+              await new Promise(r => setTimeout(r, 400));
+            }
+          } catch (e) {
+            console.error('Photo export error:', e);
+          }
+        }
+      }
+    }
+
+    if (useFolder) {
+      alert(`✅ Экспорт завершён! Сохранено файлов/папок: ${savedCount}`);
+    } else {
+      alert('✅ Скачивание завершено!');
     }
   };
 
@@ -543,18 +567,80 @@ function App() {
     return colors[provider] || '#888';
   };
 
+  const calculateItemsTotal = (items) => {
+    if (!items || !items.length) return 0;
+    return items.reduce((sum, item) => {
+      const qty = parseFloat(item.quantity) || 1;
+      const price = parseFloat(item.price) || 0;
+      const total = parseFloat(item.total) || (qty * price);
+      return sum + total;
+    }, 0);
+  };
+
+  // ====== РАСШИРЕННЫЙ ПОИСК ПО ВСЕМ ПОЛЯМ ======
   const filteredReceipts = receipts.filter(r => {
     if (filterType !== 'all' && r.document_type !== filterType) return false;
     if (filterObject !== 'all' && r.object !== filterObject) return false;
     if (!searchQuery) return true;
-    const q = searchQuery.toLowerCase();
-    return (r.store_name_ru || r.store_name || '').toLowerCase().includes(q) || (r.raw_text || '').toLowerCase().includes(q);
+    const q = searchQuery.toLowerCase().trim();
+    if (!q) return true;
+
+    const searchFields = [
+      String(r.id || ''),
+      String(r.store_name_ru || r.store_name || ''),
+      String(r.raw_text || r.recognized_text || ''),
+      String(r.object || ''),
+      String(r.currency || ''),
+      String(r.owner_name || r.owner_id || ''),
+      String(r.document_type || ''),
+      String(r.total_amount || ''),
+      String(r.subtotal || ''),
+      String(r.tax_amount || ''),
+      String(r.tax_rate || ''),
+      String(r.receipt_date || ''),
+      String(r.receipt_time || ''),
+      String(r.receipt_address || ''),
+      String(r.phone || ''),
+      String(r.card_last4 || ''),
+      String(r.recognition_method || ''),
+      String(r.warning || ''),
+      String(r.notes || ''),
+      String(r.payment_method || ''),
+      String(r.discount_amount || ''),
+      String(r.loyalty_card || ''),
+    ];
+
+    const itemsText = (r.items || []).map(i =>
+      `${i.name || ''} ${i.name_ru || ''} ${i.price || ''} ${i.quantity || ''} ${i.total || ''} ${i.category || ''} ${i.sku || ''}`
+    ).join(' ');
+
+    const allText = searchFields.join(' ') + ' ' + itemsText;
+    return allText.toLowerCase().includes(q);
   });
 
   const totalPages = itemsPerPage === 'all' ? 1 : Math.ceil(filteredReceipts.length / itemsPerPage);
   const paginatedReceipts = itemsPerPage === 'all'
     ? filteredReceipts
     : filteredReceipts.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+
+  // Форматирование имени пользователя
+  const formatUserName = (u) => {
+    if (!u) return 'Гость';
+    if (u.name && u.name !== 'admin' && !u.name.startsWith('user')) return u.name;
+    if (u.email) return u.email.split('@')[0];
+    if (u.role === 'admin') return 'Администратор';
+    return 'Пользователь';
+  };
+
+  const formatOwnerName = (receipt) => {
+    if (receipt.owner_name && receipt.owner_name !== 'admin' && !receipt.owner_name.startsWith('user')) {
+      return receipt.owner_name;
+    }
+    if (receipt.owner_id) {
+      return `Пользователь ${receipt.owner_id}`;
+    }
+    return '—';
+  };
 
   if (authChecking) {
     return (
@@ -571,11 +657,10 @@ function App() {
     return (
       <div className="App">
         <div className="login-box">
-          <h1>🧾 Receipt Manager</h1>
+          <h1>Receipt Manager</h1>
           <input type="password" placeholder="Введите пароль" value={password} onChange={e => setPassword(e.target.value)} onKeyPress={e => e.key === 'Enter' && login()} />
           <button onClick={login}>Войти</button>
           {loginError && <p className="error">{loginError}</p>}
-          <p className="hint">Пароли: admin, user1-user20</p>
         </div>
       </div>
     );
@@ -585,18 +670,18 @@ function App() {
     <div className="App">
       <header className="mini-header">
         <div className="header-left">
-          <span className="logo-icon">🧾</span>
-          <span className="user-name">{user?.name || user?.email || 'Пользователь'} {user?.role === 'admin' ? '👑' : '👤'}</span>
+          <span className="logo-icon"></span>
+          <span className="user-name">{formatUserName(user)} {user?.role === 'admin' ? '' : ''}</span>
         </div>
         <div className="header-right">
-          <button className="logout-btn" onClick={logout}>🚪 Выйти</button>
+          <button className="logout-btn" onClick={logout}> Выйти</button>
         </div>
       </header>
 
       <nav className="tabs">
-        <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}>📤 Загрузка</button>
+        <button className={activeTab === 'upload' ? 'active' : ''} onClick={() => setActiveTab('upload')}> Загрузка</button>
         <button className={activeTab === 'list' ? 'active' : ''} onClick={() => {setActiveTab('list'); loadReceipts();}}>
-          📋 Чеки ({receiptCount}) · Фактуры ({invoiceCount})
+           Чеки ({receiptCount}) · Фактуры ({invoiceCount})
         </button>
       </nav>
 
@@ -604,7 +689,7 @@ function App() {
         <div className="modal-overlay" onClick={() => setViewModal(null)}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>📄 Чек #{viewModal.id}</h2>
+              <h2> Чек #{viewModal.id}</h2>
               <button className="modal-close" onClick={() => setViewModal(null)}>✕</button>
             </div>
             <div className="modal-body">
@@ -620,9 +705,23 @@ function App() {
                   <p><strong>Тип:</strong> {viewModal.document_type}</p>
                   <p><strong>Объект:</strong> {viewModal.object || '—'}</p>
                   <p><strong>Метод:</strong> {viewModal.recognition_method || '—'}</p>
-                  <p><strong>Добавил:</strong> {viewModal.owner_name || viewModal.owner_id || '—'}</p>
+                  <p><strong>Добавил:</strong> {formatOwnerName(viewModal)}</p>
                   {viewModal.subtotal && <p><strong>Подытог:</strong> {viewModal.subtotal}</p>}
                   {viewModal.tax_amount && <p><strong>Налог:</strong> {viewModal.tax_amount} ({viewModal.tax_rate || ''})</p>}
+                  {(() => {
+                    const itemsTotal = calculateItemsTotal(viewModal.items);
+                    const total = parseFloat(viewModal.total_amount) || 0;
+                    const diff = Math.abs(total - itemsTotal).toFixed(2);
+                    if (diff > 0.01) {
+                      return (
+                        <p style={{ color: '#e74c3c', fontWeight: 600 }}>
+                           Разница: {diff} {viewModal.currency || ''}
+                          <br/><small>(Сумма строк: {itemsTotal.toFixed(2)} ≠ Итого: {total.toFixed(2)})</small>
+                        </p>
+                      );
+                    }
+                    return <p style={{ color: '#27ae60' }}> Сумма строк совпадает</p>;
+                  })()}
                 </div>
                 <div className="info-block">
                   <h3>Товары ({viewModal.items?.length || 0})</h3>
@@ -646,7 +745,7 @@ function App() {
             <div className="modal-footer">
               <button onClick={() => setViewModal(null)}>Закрыть</button>
               {user?.role === 'admin' && (
-                <button className="danger" onClick={() => deleteReceipt(viewModal.id)}>🗑️ Удалить</button>
+                <button className="danger" onClick={() => deleteReceipt(viewModal.id)}> Удалить</button>
               )}
             </div>
           </div>
@@ -657,7 +756,7 @@ function App() {
         <div className="upload-section">
           <div className="top-controls">
             <button className="model-toggle-btn" onClick={() => {setShowModelSelector(!showModelSelector); if (!models.length) loadModels();}}>
-              🤖 {showModelSelector ? 'Скрыть' : `Выбор модели (${models.length})`}
+               {showModelSelector ? 'Скрыть' : `Выбор модели (${models.length})`}
             </button>
             {showModelSelector && (
               <div className="model-dropdown" style={{ maxHeight: '400px', overflowY: 'auto' }}>
@@ -700,7 +799,7 @@ function App() {
                 </div>
               ) : (
                 <div className="drop-text">
-                  <p>📷 Перетащите фото чека сюда</p>
+                  <p> Перетащите фото чека сюда</p>
                   <p>или нажмите для выбора файлов</p>
                   <p className="hint">Можно выбрать несколько файлов</p>
                 </div>
@@ -736,15 +835,15 @@ function App() {
 
           <div className="recognize-bar">
             <button className="recognize-main-btn" onClick={recognizeAndSave} disabled={!selectedFiles.length || recognizing}>
-              {recognizing ? '⏳ Распознавание...' : '🔍 Распознать и сохранить'}
+              {recognizing ? '⏳ Распознавание...' : ' Распознать и сохранить'}
             </button>
           </div>
 
           {lastSavedReceipt && (
             <div className="saved-receipt-card">
-              <h3>✅ Чек сохранён</h3>
+              <h3> Чек сохранён</h3>
               <div className="receipt-preview">
-                {lastSavedReceipt.image_url ? <img src={lastSavedReceipt.image_url} alt="Чек" className="receipt-image" /> : <div className="no-image-thumb" style={{width:250,height:200}}>📄 Нет фото</div>}
+                {lastSavedReceipt.image_url ? <img src={lastSavedReceipt.image_url} alt="Чек" className="receipt-image" /> : <div className="no-image-thumb" style={{width:250,height:200}}> Нет фото</div>}
                 <div className="receipt-info">
                   <p><strong>ID:</strong> {lastSavedReceipt.id}</p>
                   <p><strong>Магазин:</strong> {lastSavedReceipt.store_name_ru || lastSavedReceipt.store_name || '—'}</p>
@@ -753,6 +852,7 @@ function App() {
                   <p><strong>Товаров:</strong> {lastSavedReceipt.items?.length || 0}</p>
                   <p><strong>Объект:</strong> {lastSavedReceipt.object || '—'}</p>
                   <p><strong>Метод:</strong> {lastSavedReceipt.recognition_method || '—'}</p>
+                  <p><strong>Добавил:</strong> {formatOwnerName(lastSavedReceipt)}</p>
                   {lastSavedReceipt.warning && <p className="error">⚠️ {lastSavedReceipt.warning}</p>}
                   {lastSavedReceipt.items && lastSavedReceipt.items.length > 0 && (
                     <div className="receipt-items-preview">
@@ -790,30 +890,41 @@ function App() {
               <option value="all">Все объекты</option>
               {OBJECTS.map(o => <option key={o} value={o}>{o}</option>)}
             </select>
-            <input type="text" placeholder="Поиск..." value={searchQuery} onChange={e => {setSearchQuery(e.target.value); setCurrentPage(1);}} />
+            <input type="text" placeholder="Поиск по всем полям..." value={searchQuery} onChange={e => {setSearchQuery(e.target.value); setCurrentPage(1);}} />
             <select value={itemsPerPage} onChange={e => {setItemsPerPage(e.target.value === 'all' ? 'all' : parseInt(e.target.value)); setCurrentPage(1);}}>
               {ITEMS_PER_PAGE_OPTIONS.map(opt => <option key={opt} value={opt}>{opt === 'all' ? 'Все' : opt}</option>)}
             </select>
-            <button onClick={() => exportExcel()}>📥 Excel (все)</button>
-            <button onClick={() => loadReceipts()}>🔄 Обновить</button>
+            <button onClick={() => exportExcel()}> Excel (все)</button>
+            <button onClick={() => loadReceipts()}> Обновить</button>
           </div>
 
           {selectedReceiptIds.size > 0 && (
             <div style={{ background: '#fff3cd', padding: '12px 15px', borderRadius: 8, marginBottom: 15, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-              <span>✅ Выбрано: <strong>{selectedReceiptIds.size}</strong></span>
+              <span> Выбрано: <strong>{selectedReceiptIds.size}</strong></span>
               {user?.role === 'admin' && (
-              <button onClick={bulkDelete} style={{ background: '#e74c3c', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}>🗑️ Удалить</button>
-            )}
+                <button onClick={bulkDelete} style={{ background: '#e74c3c', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}> Удалить</button>
+              )}
+
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <select value={exportMode} onChange={e => setExportMode(e.target.value)} style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ccc', fontSize: 14 }}>
-                <option value="all">Все (Excel+Фото+Текст)</option>
-                <option value="excel">📊 Excel</option>
-                <option value="photo">📷 Фото</option>
-                <option value="text">📝 Текст</option>
-              </select>
-              <button onClick={handleExport} style={{ background: '#27ae60', color: 'white', border: 'none', padding: '6px 14px', borderRadius: 6, cursor: 'pointer', fontWeight: 500 }}>📥 Скачать</button>
-            </div>
-              <button onClick={() => bulkReprocess()} style={{ background: '#9b59b6', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}>🔄 Перераспознать</button>
+                <select
+                  value={exportMode}
+                  onChange={e => setExportMode(e.target.value)}
+                  style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ccc', fontSize: 14, background: '#fff' }}
+                >
+                  <option value="all">Все (Excel + Фото + Текст)</option>
+                  <option value="excel"> Excel (CSV)</option>
+                  <option value="photo"> Фото</option>
+                  <option value="text"> Текст</option>
+                </select>
+                <button
+                  onClick={handleExport}
+                  style={{ background: '#27ae60', color: 'white', border: 'none', padding: '6px 14px', borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: 14 }}
+                >
+                   Загрузить
+                </button>
+              </div>
+
+              <button onClick={() => bulkReprocess()} style={{ background: '#9b59b6', color: 'white', border: 'none', padding: '6px 12px', borderRadius: 6, cursor: 'pointer' }}> Перераспознать</button>
               <select onChange={e => { if (e.target.value) bulkChangeObject(e.target.value); e.target.value = ''; }} style={{ padding: '6px 10px', borderRadius: 6 }}>
                 <option value="">Сменить объект...</option>
                 {OBJECTS.map(o => <option key={o} value={o}>{o}</option>)}
@@ -843,30 +954,44 @@ function App() {
           ) : (
             <>
               <div className="receipts-grid">
-                {paginatedReceipts.map(receipt => (
-                  <div key={receipt.id} className="receipt-card">
-                    <div className="receipt-header" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, paddingTop: 2 }}>
-                      <input type="checkbox" checked={selectedReceiptIds.has(receipt.id)} onChange={() => toggleSelect(receipt.id)} style={{ width: 20, height: 20, cursor: 'pointer', flexShrink: 0, marginTop: 2 }} />
-                      <h3 style={{ margin: 0, flex: 1, lineHeight: 1.3 }}>{receipt.store_name_ru || receipt.store_name || 'Без названия'}</h3>
-                      <span className="type-badge" style={{ flexShrink: 0 }}>{receipt.document_type}</span>
-                    </div>
-                    <p className="date">{formatDate(receipt.receipt_date)} {receipt.receipt_time}</p>
-                    <p className="amount">{formatAmount(receipt.total_amount, receipt.currency)}</p>
-                    <p className="items-count">🛒 {receipt.items?.length || 0} товаров</p>
-                    {receipt.object && <p style={{ fontSize: 12, color: '#7f8c8d', margin: '4px 0' }}>🏢 {receipt.object}</p>}
-                    {receipt.image_url ? (
-                      <img src={receipt.image_url} alt="Чек" className="receipt-thumb" onError={(e) => { e.target.style.display = 'none'; }} />
-                    ) : (
-                      <div className="no-image-thumb">📄 Чек</div>
-                    )}
-                    <div className="receipt-actions">
-                      <button onClick={() => setViewModal(receipt)}>👁️ Просмотр</button>
-                      {user?.role === 'admin' && (
-                        <button onClick={() => deleteReceipt(receipt.id)} className="danger">🗑️ Удалить</button>
+                {paginatedReceipts.map(receipt => {
+                  const itemsTotal = calculateItemsTotal(receipt.items);
+                  const total = parseFloat(receipt.total_amount) || 0;
+                  const diff = Math.abs(total - itemsTotal).toFixed(2);
+                  const hasDiff = diff > 0.01;
+
+                  return (
+                    <div key={receipt.id} className="receipt-card">
+                      <div className="receipt-header" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, paddingTop: 2 }}>
+                        <input type="checkbox" checked={selectedReceiptIds.has(receipt.id)} onChange={() => toggleSelect(receipt.id)} style={{ width: 20, height: 20, cursor: 'pointer', flexShrink: 0, marginTop: 2 }} />
+                        <h3 style={{ margin: 0, flex: 1, lineHeight: 1.3 }}>{receipt.store_name_ru || receipt.store_name || 'Без названия'}</h3>
+                        <span className="type-badge" style={{ flexShrink: 0 }}>{receipt.document_type}</span>
+                      </div>
+                      <p className="date">{formatDate(receipt.receipt_date)} {receipt.receipt_time}</p>
+                      <p className="amount" style={{ color: hasDiff ? '#e67e22' : '#27ae60' }}>
+                        {formatAmount(receipt.total_amount, receipt.currency)}
+                        {hasDiff && <span style={{ fontSize: 12, color: '#e74c3c', marginLeft: 6 }}>(Δ {diff})</span>}
+                      </p>
+                      <p className="items-count"> {receipt.items?.length || 0} товаров</p>
+                      {receipt.object && <p style={{ fontSize: 12, color: '#7f8c8d', margin: '4px 0' }}> {receipt.object}</p>}
+                      {/* ВЛАДЕЛЕЦ В ОСНОВНОЙ КАРТОЧКЕ */}
+                      <p style={{ fontSize: 12, color: '#3498db', margin: '4px 0', fontWeight: 500 }}>
+                        {formatOwnerName(receipt)}
+                      </p>
+                      {receipt.image_url ? (
+                        <img src={receipt.image_url} alt="Чек" className="receipt-thumb" onError={(e) => { e.target.style.display = 'none'; }} />
+                      ) : (
+                        <div className="no-image-thumb"> Чек</div>
                       )}
+                      <div className="receipt-actions">
+                        <button onClick={() => setViewModal(receipt)}> Просмотр</button>
+                        {user?.role === 'admin' && (
+                          <button onClick={() => deleteReceipt(receipt.id)} className="danger"> Удалить</button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               {itemsPerPage !== 'all' && totalPages > 1 && (
@@ -883,7 +1008,5 @@ function App() {
     </div>
   );
 }
-//
+
 export default App;
-//
-//
