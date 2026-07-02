@@ -83,6 +83,29 @@ function compressImageFile(file, maxWidth = 1600, maxHeight = 2400, quality = 0.
   });
 }
 
+// ====== HIGHLIGHT COMPONENT ======
+function HighlightText({ text, query, style = {} }) {
+  if (!query || !text) return <span style={style}>{text || ''}</span>;
+  const q = query.toLowerCase().trim();
+  if (!q) return <span style={style}>{text}</span>;
+
+  const str = String(text);
+  const regex = new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+  const parts = str.split(regex);
+
+  return (
+    <span style={style}>
+      {parts.map((part, i) =>
+        part.toLowerCase() === q ? (
+          <mark key={i} style={{ backgroundColor: '#ffeb3b', color: '#000', padding: '0 2px', borderRadius: 2, fontWeight: 600 }}>{part}</mark>
+        ) : (
+          <span key={i}>{part}</span>
+        )
+      )}
+    </span>
+  );
+}
+
 function App() {
   const [token, setToken] = useState(localStorage.getItem('token') || null);
   const [user, setUser] = useState(null);
@@ -577,7 +600,6 @@ function App() {
     }, 0);
   };
 
-  // ====== РАСШИРЕННЫЙ ПОИСК ПО ВСЕМ ПОЛЯМ ======
   const filteredReceipts = receipts.filter(r => {
     if (filterType !== 'all' && r.document_type !== filterType) return false;
     if (filterObject !== 'all' && r.object !== filterObject) return false;
@@ -623,7 +645,6 @@ function App() {
     ? filteredReceipts
     : filteredReceipts.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
 
-  // Форматирование имени пользователя
   const formatUserName = (u) => {
     if (!u) return 'Гость';
     if (u.name && u.name !== 'admin' && !u.name.startsWith('user')) return u.name;
@@ -699,13 +720,13 @@ function App() {
               <div className="modal-info">
                 <div className="info-block">
                   <h3>Основная информация</h3>
-                  <p><strong>Магазин:</strong> {viewModal.store_name_ru || viewModal.store_name || '—'}</p>
+                  <p><strong>Магазин:</strong> <HighlightText text={viewModal.store_name_ru || viewModal.store_name || '—'} query={searchQuery} /></p>
                   <p><strong>Дата:</strong> {formatDate(viewModal.receipt_date)} {viewModal.receipt_time}</p>
                   <p><strong>Итого:</strong> {formatAmount(viewModal.total_amount, viewModal.currency)}</p>
                   <p><strong>Тип:</strong> {viewModal.document_type}</p>
-                  <p><strong>Объект:</strong> {viewModal.object || '—'}</p>
+                  <p><strong>Объект:</strong> <HighlightText text={viewModal.object || '—'} query={searchQuery} /></p>
                   <p><strong>Метод:</strong> {viewModal.recognition_method || '—'}</p>
-                  <p><strong>Добавил:</strong> {formatOwnerName(viewModal)}</p>
+                  <p><strong>Добавил:</strong> <HighlightText text={formatOwnerName(viewModal)} query={searchQuery} /></p>
                   {viewModal.subtotal && <p><strong>Подытог:</strong> {viewModal.subtotal}</p>}
                   {viewModal.tax_amount && <p><strong>Налог:</strong> {viewModal.tax_amount} ({viewModal.tax_rate || ''})</p>}
                   {(() => {
@@ -729,7 +750,13 @@ function App() {
                     <thead><tr><th>№</th><th>Товар</th><th>Кол-во</th><th>Цена</th><th>Сумма</th></tr></thead>
                     <tbody>
                       {(viewModal.items || []).map((item, i) => (
-                        <tr key={i}><td>{i + 1}</td><td>{item.name_ru || item.name || '—'}</td><td>{item.quantity}</td><td>{item.price}</td><td>{item.total}</td></tr>
+                        <tr key={i}>
+                          <td>{i + 1}</td>
+                          <td><HighlightText text={item.name_ru || item.name || '—'} query={searchQuery} /></td>
+                          <td>{item.quantity}</td>
+                          <td>{item.price}</td>
+                          <td>{item.total}</td>
+                        </tr>
                       ))}
                     </tbody>
                   </table>
@@ -737,7 +764,7 @@ function App() {
                 {viewModal.raw_text && (
                   <div className="info-block">
                     <h3>Распознанный текст</h3>
-                    <pre className="raw-text">{viewModal.raw_text}</pre>
+                    <pre className="raw-text"><HighlightText text={viewModal.raw_text} query={searchQuery} /></pre>
                   </div>
                 )}
               </div>
@@ -964,7 +991,9 @@ function App() {
                     <div key={receipt.id} className="receipt-card">
                       <div className="receipt-header" style={{ display: 'flex', alignItems: 'flex-start', gap: 10, paddingTop: 2 }}>
                         <input type="checkbox" checked={selectedReceiptIds.has(receipt.id)} onChange={() => toggleSelect(receipt.id)} style={{ width: 20, height: 20, cursor: 'pointer', flexShrink: 0, marginTop: 2 }} />
-                        <h3 style={{ margin: 0, flex: 1, lineHeight: 1.3 }}>{receipt.store_name_ru || receipt.store_name || 'Без названия'}</h3>
+                        <h3 style={{ margin: 0, flex: 1, lineHeight: 1.3 }}>
+                          <HighlightText text={receipt.store_name_ru || receipt.store_name || 'Без названия'} query={searchQuery} />
+                        </h3>
                         <span className="type-badge" style={{ flexShrink: 0 }}>{receipt.document_type}</span>
                       </div>
                       <p className="date">{formatDate(receipt.receipt_date)} {receipt.receipt_time}</p>
@@ -973,10 +1002,13 @@ function App() {
                         {hasDiff && <span style={{ fontSize: 12, color: '#e74c3c', marginLeft: 6 }}>(Δ {diff})</span>}
                       </p>
                       <p className="items-count"> {receipt.items?.length || 0} товаров</p>
-                      {receipt.object && <p style={{ fontSize: 12, color: '#7f8c8d', margin: '4px 0' }}> {receipt.object}</p>}
-                      {/* ВЛАДЕЛЕЦ В ОСНОВНОЙ КАРТОЧКЕ */}
+                      {receipt.object && (
+                        <p style={{ fontSize: 12, color: '#7f8c8d', margin: '4px 0' }}>
+                          <HighlightText text={receipt.object} query={searchQuery} />
+                        </p>
+                      )}
                       <p style={{ fontSize: 12, color: '#3498db', margin: '4px 0', fontWeight: 500 }}>
-                        {formatOwnerName(receipt)}
+                        <HighlightText text={formatOwnerName(receipt)} query={searchQuery} />
                       </p>
                       {receipt.image_url ? (
                         <img src={receipt.image_url} alt="Чек" className="receipt-thumb" onError={(e) => { e.target.style.display = 'none'; }} />
