@@ -83,16 +83,13 @@ function compressImageFile(file, maxWidth = 1600, maxHeight = 2400, quality = 0.
   });
 }
 
-// ====== HIGHLIGHT COMPONENT ======
 function HighlightText({ text, query, style = {} }) {
   if (!query || !text) return <span style={style}>{text || ''}</span>;
   const q = query.toLowerCase().trim();
   if (!q) return <span style={style}>{text}</span>;
-
   const str = String(text);
   const regex = new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
   const parts = str.split(regex);
-
   return (
     <span style={style}>
       {parts.map((part, i) =>
@@ -140,6 +137,10 @@ function App() {
 
   const [selectedReceiptIds, setSelectedReceiptIds] = useState(new Set());
   const [viewModal, setViewModal] = useState(null);
+
+  // === Состояния для загрузки папки ===
+  const [folderProgress, setFolderProgress] = useState({ active: false, current: 0, total: 0, success: 0, errors: 0, currentFile: '' });
+  const [folderResults, setFolderResults] = useState([]);
 
   const receiptCount = receipts.filter(r => r.document_type === 'receipt' || !r.document_type).length;
   const invoiceCount = receipts.filter(r => r.document_type === 'invoice').length;
@@ -233,6 +234,7 @@ function App() {
       setPreviewUrls(urls);
       setPreviewUrl(urls[0]);
       setLastSavedReceipt(null);
+      setFolderResults([]);
     }
   };
 
@@ -247,6 +249,7 @@ function App() {
       setPreviewUrls(urls);
       setPreviewUrl(urls[0]);
       setLastSavedReceipt(null);
+      setFolderResults([]);
     }
   };
 
@@ -301,6 +304,72 @@ function App() {
       alert('Ошибка: ' + e.message);
     }
     setRecognizing(false);
+  };
+
+  // ====== ЗАГРУЗКА И РАСПОЗНАВАНИЕ ВСЕЙ ПАПКИ ======
+  const handleFolderSelect = async (e) => {
+    const allFiles = Array.from(e.target.files).filter(f => f.type.startsWith('image/'));
+    if (allFiles.length === 0) {
+      alert('В папке не найдено изображений');
+      return;
+    }
+
+    setFolderProgress({ active: true, current: 0, total: allFiles.length, success: 0, errors: 0, currentFile: '' });
+    setFolderResults([]);
+    setRecognizing(true);
+
+    const results = [];
+
+    for (let i = 0; i < allFiles.length; i++) {
+      const file = allFiles[i];
+      setFolderProgress(prev => ({ ...prev, current: i + 1, currentFile: file.name }));
+
+      try {
+        let fileToUpload = file;
+        if (file.size > MAX_FILE_SIZE_MB * 1024 * 1024) {
+          fileToUpload = await compressImageFile(file);
+        }
+
+        const formData = new FormData();
+        formData.append('image', fileToUpload);
+        formData.append('model', selectedModel);
+        formData.append('currency', currency);
+        formData.append('docType', docType);
+        formData.append('object', object);
+        formData.append('token', token);
+
+        const res = await fetch(`${API_URL}/api/upload-receipt?token=${token}`, { method: 'POST', body: formData });
+        const text = await res.text();
+        let data;
+        try { data = JSON.parse(text); } catch { throw new Error(`Сервер вернул ${res.status}`); }
+
+        if (!res.ok || (!data.success && !data.id)) {
+          throw new Error(data.error || `Ошибка сервера: ${res.status}`);
+        }
+
+        const receiptData = data.data || data;
+        if (receiptData.image_url) receiptData.image_url = fixImageUrl(receiptData.image_url);
+        results.push({ file: file.name, status: 'success', receipt: receiptData });
+        setFolderProgress(prev => ({ ...prev, success: prev.success + 1 }));
+      } catch (err) {
+        console.error(`Folder upload error for ${file.name}:`, err);
+        results.push({ file: file.name, status: 'error', error: err.message });
+        setFolderProgress(prev => ({ ...prev, errors: prev.errors + 1 }));
+      }
+    }
+
+    setFolderResults(results);
+    setFolderProgress(prev => ({ ...prev, active: false, currentFile: '' }));
+    setRecognizing(false);
+    loadReceipts();
+
+    const successCount = results.filter(r => r.status === 'success').length;
+    const errorCount = results.filter(r => r.status === 'error').length;
+    if (errorCount === 0) {
+      alert(`✅ Все ${successCount} чеков успешно распознаны и сохранены!`);
+    } else {
+      alert(`✅ Успешно: ${successCount}\n❌ Ошибок: ${errorCount}\n\nСмотрите детали ниже.`);
+    }
   };
 
   const deleteReceipt = async (id) => {
@@ -833,6 +902,103 @@ function App() {
               )}
             </label>
           </div>
+
+          {/* ====== КНОПКА ЗАГРУЗКИ ПАПКИ ====== */}
+          <div style={{ marginTop: 15, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <input
+              type="file"
+              id="folder-input"
+              webkitdirectory=""
+              directory=""
+              multiple
+              accept="image/*"
+              onChange={handleFolderSelect}
+              style={{ display: 'none' }}
+            />
+            <label
+              htmlFor="folder-input"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '10px 18px',
+                background: '#9b59b6',
+                color: '#fff',
+                borderRadius: 8,
+                cursor: 'pointer',
+                fontWeight: 600,
+                fontSize: 15,
+                userSelect: 'none'
+              }}
+            >
+               Распознать папку
+            </label>
+            <span style={{ fontSize: 13, color: '#7f8c8d' }}>
+              Выберите папку — все фото из неё будут распознаны автоматически
+            </span>
+          </div>
+
+          {/* ====== ПРОГРЕСС ЗАГРУЗКИ ПАПКИ ====== */}
+          {folderProgress.active && (
+            <div style={{ marginTop: 15, padding: 15, background: '#ecf0f1', borderRadius: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                <strong> Распознавание папки...</strong>
+                <span>{folderProgress.current} / {folderProgress.total}</span>
+              </div>
+              <div style={{ width: '100%', height: 20, background: '#bdc3c7', borderRadius: 10, overflow: 'hidden' }}>
+                <div style={{
+                  width: `${folderProgress.total > 0 ? (folderProgress.current / folderProgress.total * 100) : 0}%`,
+                  height: '100%',
+                  background: '#27ae60',
+                  transition: 'width 0.3s',
+                  borderRadius: 10
+                }} />
+              </div>
+              <p style={{ fontSize: 12, color: '#555', marginTop: 6 }}>
+                {folderProgress.currentFile}
+              </p>
+              <p style={{ fontSize: 13, color: '#27ae60', marginTop: 4 }}>
+                 Успешно: {folderProgress.success} &nbsp;|&nbsp;
+                <span style={{ color: '#e74c3c' }}>❌ Ошибок: {folderProgress.errors}</span>
+              </p>
+            </div>
+          )}
+
+          {/* ====== РЕЗУЛЬТАТЫ ЗАГРУЗКИ ПАПКИ ====== */}
+          {folderResults.length > 0 && !folderProgress.active && (
+            <div style={{ marginTop: 15, padding: 15, background: '#e8f5e9', borderRadius: 8, maxHeight: 300, overflowY: 'auto' }}>
+              <h4 style={{ margin: '0 0 10px 0' }}>📁 Результаты загрузки папки</h4>
+              {folderResults.map((res, idx) => (
+                <div key={idx} style={{
+                  padding: '6px 10px',
+                  marginBottom: 4,
+                  borderRadius: 4,
+                  background: res.status === 'success' ? '#d4edda' : '#f8d7da',
+                  fontSize: 13,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8
+                }}>
+                  <span>{res.status === 'success' ? '✅' : '❌'}</span>
+                  <span style={{ flex: 1 }}>{res.file}</span>
+                  {res.status === 'success' && res.receipt && (
+                    <span style={{ color: '#155724' }}>
+                      {res.receipt.store_name_ru || res.receipt.store_name || 'Чек'} — {formatAmount(res.receipt.total_amount, res.receipt.currency)}
+                    </span>
+                  )}
+                  {res.status === 'error' && (
+                    <span style={{ color: '#721c24' }}>{res.error}</span>
+                  )}
+                </div>
+              ))}
+              <button
+                onClick={() => setFolderResults([])}
+                style={{ marginTop: 10, padding: '6px 12px', borderRadius: 6, border: 'none', background: '#95a5a6', color: '#fff', cursor: 'pointer' }}
+              >
+                Скрыть результаты
+              </button>
+            </div>
+          )}
 
           <div className="controls-row">
             <div className="control-group">
